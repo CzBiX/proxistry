@@ -97,10 +97,7 @@ impl FsStorage {
 
     fn check_path(path: PathBuf) -> AppResult<PathBuf> {
         if path.components().any(|c| c == Component::ParentDir) {
-            return Err(AppError::Cache(format!(
-                "invalid cache key: {:?}",
-                path
-            )));
+            return Err(AppError::Cache(format!("invalid cache key: {:?}", path)));
         }
 
         Ok(path)
@@ -401,7 +398,6 @@ mod tests {
         let path = PathBuf::from("/foo/blobs/sha256/ab/abcdef");
         assert!(FsStorage::check_path(path).is_ok());
     }
-
 
     #[test]
     fn test_check_path_rejects_dot_segments() {

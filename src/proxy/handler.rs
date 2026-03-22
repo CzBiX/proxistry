@@ -129,8 +129,7 @@ pub async fn proxy_handler(
             let body_bytes = axum::body::to_bytes(req.into_body(), 512 * 1024 * 1024)
                 .await
                 .ok()
-                .map(|b| if b.is_empty() { None } else { Some(b) })
-                .flatten();
+                .and_then(|b| if b.is_empty() { None } else { Some(b) });
 
             let resp = proxy_passthrough(
                 &state,
@@ -392,12 +391,7 @@ async fn handle_blob_get(
                                     }
                                 }
                                 Err(e) => {
-                                    let _ = cache_tx
-                                        .send(Err(std::io::Error::new(
-                                            std::io::ErrorKind::Other,
-                                            e,
-                                        )))
-                                        .await;
+                                    let _ = cache_tx.send(Err(std::io::Error::other(e))).await;
                                     break;
                                 }
                             }
@@ -415,12 +409,7 @@ async fn handle_blob_get(
                                     }
                                 }
                                 Err(e) => {
-                                    let _ = client_tx
-                                        .send(Err(std::io::Error::new(
-                                            std::io::ErrorKind::Other,
-                                            e,
-                                        )))
-                                        .await;
+                                    let _ = client_tx.send(Err(std::io::Error::other(e))).await;
                                     break;
                                 }
                             }
@@ -429,12 +418,11 @@ async fn handle_blob_get(
                     }
                 }
                 Err(e) => {
-                    let io_err = std::io::ErrorKind::Other;
                     let _ = client_tx
-                        .send(Err(std::io::Error::new(io_err, e.to_string())))
+                        .send(Err(std::io::Error::other(e.to_string())))
                         .await;
                     let _ = cache_tx
-                        .send(Err(std::io::Error::new(io_err, "upstream error")))
+                        .send(Err(std::io::Error::other("upstream error")))
                         .await;
                     return;
                 }
@@ -581,13 +569,13 @@ fn rewrite_response_location(
 ) -> Response {
     let (mut parts, body) = response.into_parts();
 
-    if let Some(location) = parts.headers.get(header::LOCATION) {
-        if let Ok(loc_str) = location.to_str() {
-            let rewritten =
-                rewrite::rewrite_location_header(loc_str, registry_name, registry_url, base_url);
-            if let Ok(val) = HeaderValue::from_str(&rewritten) {
-                parts.headers.insert(header::LOCATION, val);
-            }
+    if let Some(location) = parts.headers.get(header::LOCATION)
+        && let Ok(loc_str) = location.to_str()
+    {
+        let rewritten =
+            rewrite::rewrite_location_header(loc_str, registry_name, registry_url, base_url);
+        if let Ok(val) = HeaderValue::from_str(&rewritten) {
+            parts.headers.insert(header::LOCATION, val);
         }
     }
 

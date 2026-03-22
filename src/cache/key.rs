@@ -1,9 +1,9 @@
-/// Generate cache keys for different content types.
-///
-/// Cache key layout:
-///   Manifests:  manifests/{registry}/{name}/{digest_or_tag}
-///   Blobs:      blobs/sha256/{first_2_chars}/{digest}
-///   Tag index:  index/{registry}/{name}/{tag}
+//! Generate cache keys for different content types.
+//!
+//! Cache key layout:
+//!   Manifests:  manifests/{registry}/{name}/{digest_or_tag}
+//!   Blobs:      blobs/sha256/{first_2_chars}/{digest}
+//!   Tag index:  index/{registry}/{name}/{tag}
 
 /// Generate a cache key for a manifest.
 pub fn manifest_key(registry: &str, name: &str, reference: &str) -> String {

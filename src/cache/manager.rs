@@ -126,14 +126,14 @@ impl CacheManager {
         self.storage.put(&cache_key, data, meta).await?;
 
         // If reference is a tag, also store tag→digest mapping
-        if !key::is_digest(reference) {
-            if let Some(ref d) = digest {
-                let index_key = key::tag_index_key(registry, name, reference);
-                let index_meta = CacheMetadata::new(d.len() as u64, None, None);
-                self.storage
-                    .put(&index_key, Bytes::from(d.clone()), index_meta)
-                    .await?;
-            }
+        if !key::is_digest(reference)
+            && let Some(ref d) = digest
+        {
+            let index_key = key::tag_index_key(registry, name, reference);
+            let index_meta = CacheMetadata::new(d.len() as u64, None, None);
+            self.storage
+                .put(&index_key, Bytes::from(d.clone()), index_meta)
+                .await?;
         }
 
         tracing::debug!(key = %cache_key, "manifest cached");

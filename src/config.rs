@@ -118,20 +118,11 @@ pub enum AuthConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct TlsConfig {
     pub disable: bool,
     pub insecure: bool,
     pub ca_cert: Option<PathBuf>,
-}
-
-impl Default for TlsConfig {
-    fn default() -> Self {
-        Self {
-            disable: false,
-            insecure: false,
-            ca_cert: None,
-        }
-    }
 }
 
 impl AppConfig {

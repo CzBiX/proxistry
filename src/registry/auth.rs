@@ -152,11 +152,10 @@ impl AuthManager {
         if let Some(AuthConfig::Basic {
             username, password, ..
         }) = auth_config
+            && let (user, Some(pass)) = (username, password)
         {
-            if let (user, Some(pass)) = (username, password) {
-                tracing::debug!(registry = %registry_name, username = %user, "attaching basic credentials to token request");
-                req = req.basic_auth(user, Some(pass));
-            }
+            tracing::debug!(registry = %registry_name, username = %user, "attaching basic credentials to token request");
+            req = req.basic_auth(user, Some(pass));
         }
 
         let resp = req

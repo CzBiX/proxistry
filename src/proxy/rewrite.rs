@@ -25,8 +25,7 @@ pub fn rewrite_location_header(
 
     // If location points to the upstream registry, rewrite it through the proxy
     let registry_base = registry_url.trim_end_matches('/');
-    if location.starts_with(registry_base) {
-        let path = &location[registry_base.len()..];
+    if let Some(path) = location.strip_prefix(registry_base) {
         // Strip /v2/ prefix from path since we'll re-add it with registry prefix
         let stripped = path.strip_prefix("/v2/").unwrap_or(path);
         let base = base_url.trim_end_matches('/');

@@ -72,7 +72,10 @@ pub fn validate_reference(reference: &str) -> AppResult<()> {
             )));
         }
         if !re_tag().is_match(reference) {
-            return Err(AppError::BadRequest(format!("invalid tag: {:?}", reference)));
+            return Err(AppError::BadRequest(format!(
+                "invalid tag: {:?}",
+                reference
+            )));
         }
         Ok(())
     }
@@ -509,30 +512,30 @@ mod tests {
     #[test]
     fn test_invalid_reference_rejected() {
         // Reference with invalid characters
-        assert!(parse_path(
-            "/v2/docker.io/library/nginx/manifests/../../etc/passwd",
-            "GET"
-        )
-        .is_err());
+        assert!(
+            parse_path(
+                "/v2/docker.io/library/nginx/manifests/../../etc/passwd",
+                "GET"
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn test_invalid_digest_rejected() {
         // Digest with non-hex characters
-        assert!(parse_path(
-            "/v2/docker.io/library/nginx/blobs/sha256:notahexstring!",
-            "GET"
-        )
-        .is_err());
+        assert!(
+            parse_path(
+                "/v2/docker.io/library/nginx/blobs/sha256:notahexstring!",
+                "GET"
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn test_invalid_name_component_rejected() {
         // Name component starts with uppercase
-        assert!(parse_path(
-            "/v2/docker.io/Library/nginx/manifests/latest",
-            "GET"
-        )
-        .is_err());
+        assert!(parse_path("/v2/docker.io/Library/nginx/manifests/latest", "GET").is_err());
     }
 }
