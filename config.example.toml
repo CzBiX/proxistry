@@ -1,0 +1,38 @@
+[server]
+# Address and port to listen on
+# listen = "0.0.0.0:5000"
+# External base URL of the proxy, useful when running behind a reverse proxy with a different hostname or HTTPS.
+# base_url = "http://{listen}"
+# Maximum number of concurrent requests per upstream registry
+# concurrent = 10
+
+[cache]
+# Directory for cached data (manifests, blobs, index)
+# data_dir = "/var/lib/proxistry/cache"
+# Maximum cache size in GB; LRU eviction runs when exceeded
+# max_size_gb = 4
+# Default manifest cache TTL (per-registry overrides below take precedence)
+# Supports human-readable durations: "10m", "1h", "30s", etc.
+# manifest_ttl = "30m"
+# Blob cache TTL (blobs are content-addressed and immutable, so this can be long)
+# blob_ttl = "7d"
+
+[whitelist]
+# When enabled, only registries listed here can be proxied
+# enabled = false
+# registries = ["docker.io", "ghcr.io"]
+
+# --- Registry Configurations ---
+# Each [[registries]] block defines an upstream registry.
+
+#[[registries]]
+#name = "docker.io"
+#[registries.auth]
+#type = "bearer"
+#token = "token"
+
+#[[registries]]
+#name = "ghcr.io"
+#[registries.auth]
+#type = "bearer"
+#token = "ghp_xxx"
