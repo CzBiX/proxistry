@@ -35,7 +35,7 @@ jobs:
         shell: bash
         run: |
           name="proxistry-${{ matrix.target }}.gz"
-          gzip -c target/${{ matrix.target }}/release/proxistry > ${name}
+          gzip -c target/release/proxistry > ${name}
           echo "ASSET=${name}" >> $GITHUB_ENV
 
       - name: Upload artifact
