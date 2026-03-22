@@ -25,32 +25,35 @@ jobs:
       - uses: actions/checkout@v6
 
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
 
       - uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.target }}
 
       - name: Build
-        run: cargo build --locked --release --target ${{ matrix.target }}
+        run: cargo build --locked --release
 
       - name: Package
         shell: bash
         run: |
-          name="proxistry-${{ matrix.target }}"
-          gzip -c target/${{ matrix.target }}/release/proxistry > ${name}.gz
-          echo "ASSET=${name}.gz" >> $GITHUB_ENV
+          name="proxistry-${{ matrix.target }}.gz"
+          gzip -c target/${{ matrix.target }}/release/proxistry > ${name}
+          echo "ASSET=${name}" >> $GITHUB_ENV
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
-          name: proxistry-${{ matrix.target }}
+          name: ${{ env.ASSET }}
           path: ${{ env.ASSET }}
 
   docker:
-    name: Build & Push Docker Image
-    runs-on: ubuntu-latest
+    name: Build & Push Docker Image (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
     permissions:
       contents: read
       packages: write
