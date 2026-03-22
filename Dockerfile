@@ -5,14 +5,14 @@ WORKDIR /app
 # Cache dependencies by building a dummy project first
 COPY Cargo.toml Cargo.lock ./
 RUN mkdir src && echo "fn main() {}" > src/main.rs && \
-    cargo build --release && rm -rf src target/release/deps/proxistry*
+    cargo build --locked --release && rm -rf src target/release/deps/proxistry*
 
 # Build the real project
 COPY src ./src
-RUN cargo build --release
+RUN cargo build --locked --release
 
 # Runtime stage
-FROM debian:bookworm-slim
+FROM gcr.io/distroless/cc-debian13
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
