@@ -14,19 +14,8 @@ RUN cargo build --locked --release
 # Runtime stage
 FROM gcr.io/distroless/cc-debian13
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN useradd --create-home --shell /bin/bash proxistry
-
-COPY --from=builder /app/target/release/proxistry /usr/local/bin/proxistry
-
-RUN mkdir -p /var/lib/proxistry/cache && chown -R proxistry:proxistry /var/lib/proxistry
-
-USER proxistry
-
+COPY --from=builder /app/target/release/proxistry /
 EXPOSE 8000
 
-ENTRYPOINT ["proxistry"]
+ENTRYPOINT ["./proxistry"]
 CMD ["--config", "/etc/proxistry/config.toml"]
