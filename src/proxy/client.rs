@@ -1,4 +1,3 @@
-use bytes::Bytes;
 use http::header;
 use reqwest::header::{AUTHORIZATION, HeaderMap, USER_AGENT};
 use reqwest::{Client, Method, Response, StatusCode};
@@ -68,53 +67,33 @@ impl UpstreamClient {
     }
 
     /// Send a request to an upstream registry, handling auth automatically.
+    /// Retries once on 401 with a fresh token (safe for buffered bodies).
     pub async fn request(
         &self,
         registry: &RegistryConfig,
         method: Method,
         url: &str,
         headers: HeaderMap,
-        body: Option<Bytes>,
+        body: Option<impl Into<reqwest::Body>>,
     ) -> AppResult<Response> {
-        let client = self.get_or_create_client(registry).await?;
+        let (client, mut req, _permit) = self
+            .prepare_request(registry, method.clone(), url, &headers)
+            .await?;
 
-        let sem = {
-            let semaphores = self.semaphores.lock().await;
-            semaphores.get(&registry.name).cloned()
-        };
-        let _permit = if let Some(sem) = sem {
-            Some(
-                sem.acquire_owned()
-                    .await
-                    .map_err(|e| AppError::Internal(format!("semaphore error: {}", e)))?,
-            )
-        } else {
-            None
-        };
-
-        let mut req = self.apply_common_request_parts(
-            client.request(method.clone(), url),
-            registry,
-            &headers,
-        );
-
-        // Add auth header
-        if let Some(auth_header) = headers.get(header::AUTHORIZATION) {
-            req = req.header(AUTHORIZATION, auth_header);
-        } else if let Some(auth_header) = self
-            .auth_manager
-            .get_auth_header(&registry.name, registry.auth.as_ref())
-            .await?
-        {
-            req = req.header(AUTHORIZATION, auth_header);
+        let has_body = body.is_some();
+        if let Some(body) = body {
+            req = req.body(body);
         }
-
-        req = Self::apply_body(req, body.as_ref());
-
         let resp = req.send().await?;
 
         // Handle 401 - try token exchange
         if resp.status() == StatusCode::UNAUTHORIZED {
+            if has_body {
+                return Err(AppError::Internal(
+                    "cannot retry request with body after 401".to_string(),
+                ));
+            }
+
             let resp_headers = resp.headers().clone();
             if let Some(auth_header) = self
                 .auth_manager
@@ -127,17 +106,57 @@ impl UpstreamClient {
                     registry,
                     &headers,
                 );
-
                 retry_req = retry_req.header(AUTHORIZATION, auth_header);
 
-                retry_req = Self::apply_body(retry_req, body.as_ref());
-
-                let retry_resp = retry_req.send().await?;
-                return Ok(retry_resp);
+                return Ok(retry_req.send().await?);
             }
         }
 
         Ok(resp)
+    }
+
+    /// Shared setup: get/create client, acquire semaphore, build request with
+    /// common headers and auth. Returns (client, request_builder, permit).
+    async fn prepare_request(
+        &self,
+        registry: &RegistryConfig,
+        method: Method,
+        url: &str,
+        headers: &HeaderMap,
+    ) -> AppResult<(
+        Client,
+        reqwest::RequestBuilder,
+        Option<tokio::sync::OwnedSemaphorePermit>,
+    )> {
+        let client = self.get_or_create_client(registry).await?;
+
+        let permit = {
+            let semaphores = self.semaphores.lock().await;
+            match semaphores.get(&registry.name).cloned() {
+                Some(sem) => Some(
+                    sem.acquire_owned()
+                        .await
+                        .map_err(|e| AppError::Internal(format!("semaphore error: {}", e)))?,
+                ),
+                None => None,
+            }
+        };
+
+        let mut req =
+            self.apply_common_request_parts(client.request(method, url), registry, headers);
+
+        // Add auth header
+        if let Some(auth_header) = headers.get(header::AUTHORIZATION) {
+            req = req.header(AUTHORIZATION, auth_header);
+        } else if let Some(auth_header) = self
+            .auth_manager
+            .get_auth_header(&registry.name, registry.auth.as_ref())
+            .await?
+        {
+            req = req.header(AUTHORIZATION, auth_header);
+        }
+
+        Ok((client, req, permit))
     }
 
     fn apply_common_request_parts(
@@ -175,14 +194,6 @@ impl UpstreamClient {
             req.header(USER_AGENT, ua.as_str())
         } else {
             req.header(USER_AGENT, "proxistry/0.1")
-        }
-    }
-
-    fn apply_body(req: reqwest::RequestBuilder, body: Option<&Bytes>) -> reqwest::RequestBuilder {
-        if let Some(b) = body {
-            req.body(b.clone())
-        } else {
-            req
         }
     }
 }

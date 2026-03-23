@@ -111,8 +111,6 @@ pub enum PathType {
     BlobDelete { digest: String },
     /// GET /v2/{name}/referrers/{digest}
     Referrers { digest: String },
-    /// Other/unknown
-    Other,
 }
 
 /// Check if a path segment looks like a registry host.

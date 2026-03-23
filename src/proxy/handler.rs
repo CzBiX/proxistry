@@ -123,22 +123,27 @@ pub async fn proxy_handler(
         }
         PathType::TagsList | PathType::Referrers { .. } => {
             // Always proxy tags list and referrers API, never cache
-            proxy_passthrough(&state, &registry, Method::GET, &upstream_url, headers, None).await
+            proxy_passthrough(
+                &state,
+                &registry,
+                Method::GET,
+                &upstream_url,
+                headers,
+                None::<reqwest::Body>,
+            )
+            .await
         }
         PathType::BlobUpload { .. } => {
-            // Read body for upload requests
-            let body_bytes = axum::body::to_bytes(req.into_body(), 512 * 1024 * 1024)
-                .await
-                .ok()
-                .and_then(|b| if b.is_empty() { None } else { Some(b) });
-
+            // Stream body directly to upstream without buffering
+            let body = http_body_util::BodyDataStream::new(req.into_body());
+            let body_stream = reqwest::Body::wrap_stream(body);
             let resp = proxy_passthrough(
                 &state,
                 &registry,
                 method,
                 &upstream_url,
                 headers,
-                body_bytes,
+                Some(body_stream),
             )
             .await?;
 
@@ -157,7 +162,7 @@ pub async fn proxy_handler(
                 Method::DELETE,
                 &upstream_url,
                 headers,
-                None,
+                None::<reqwest::Body>,
             )
             .await?;
             // Invalidate cache on successful delete
@@ -176,16 +181,13 @@ pub async fn proxy_handler(
                 Method::DELETE,
                 &upstream_url,
                 headers,
-                None,
+                None::<reqwest::Body>,
             )
             .await?;
             if resp.status().is_success() {
                 let _ = state.cache.invalidate_blob(digest).await;
             }
             Ok(resp)
-        }
-        PathType::Other => {
-            proxy_passthrough(&state, &registry, method, &upstream_url, headers, None).await
         }
     }
 }
@@ -222,12 +224,12 @@ async fn handle_manifest_get(
             Method::GET,
             upstream_url,
             req_headers.clone(),
-            None,
+            None::<reqwest::Body>,
         )
         .await?;
 
     if !resp.status().is_success() {
-        return convert_upstream_response(resp).await;
+        return convert_upstream_response_stream(resp);
     }
 
     let status = resp.status();
@@ -323,7 +325,7 @@ async fn handle_blob_get(
             Method::GET,
             upstream_url,
             req_headers.clone(),
-            None,
+            None::<reqwest::Body>,
         )
         .await;
     }
@@ -391,7 +393,7 @@ async fn fetch_blob_upstream_with_guard(
             Method::GET,
             upstream_url,
             req_headers.clone(),
-            None,
+            None::<reqwest::Body>,
         )
         .await;
 
@@ -406,7 +408,7 @@ async fn fetch_blob_upstream_with_guard(
 
     if !resp.status().is_success() {
         drop(guard);
-        return convert_upstream_response(resp).await;
+        return convert_upstream_response_stream(resp);
     }
 
     let resp_headers = resp.headers().clone();
@@ -560,35 +562,34 @@ async fn fetch_blob_upstream(
                 Method::GET,
                 upstream_url,
                 req_headers.clone(),
-                None,
+                None::<reqwest::Body>,
             )
             .await
         }
     }
 }
 
-/// Pass a request through to upstream without caching.
+/// Pass a request through to upstream without caching, streaming the response.
 async fn proxy_passthrough(
     state: &AppState,
     registry: &crate::config::RegistryConfig,
     method: Method,
     url: &str,
     headers: HeaderMap,
-    body: Option<Bytes>,
+    body: Option<impl Into<reqwest::Body>>,
 ) -> Result<Response, AppError> {
     let resp = state
         .upstream_client
         .request(registry, method, url, headers, body)
         .await?;
 
-    convert_upstream_response(resp).await
+    convert_upstream_response_stream(resp)
 }
 
-/// Convert a reqwest::Response to an axum::Response.
-async fn convert_upstream_response(resp: reqwest::Response) -> Result<Response, AppError> {
+/// Convert a reqwest::Response to a streaming axum::Response.
+fn convert_upstream_response_stream(resp: reqwest::Response) -> Result<Response, AppError> {
     let status = resp.status();
     let headers = resp.headers().clone();
-    let body = resp.bytes().await?;
 
     let mut response = Response::builder()
         .status(StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY));
@@ -608,7 +609,8 @@ async fn convert_upstream_response(resp: reqwest::Response) -> Result<Response, 
         }
     }
 
-    Ok(response.body(Body::from(body)).unwrap())
+    let body = Body::from_stream(resp.bytes_stream());
+    Ok(response.body(body).unwrap())
 }
 
 /// Build a response from cached data (buffered, for manifests).
