@@ -11,6 +11,7 @@ Proxistry sits between your container runtime and upstream registries, transpare
 - **Manifest & blob caching** -- Manifests and blobs are cached on disk with independent, configurable TTLs.
 - **LRU eviction** -- Automatically evicts least-recently-used entries when cache exceeds the configured size limit.
 - **Streaming tee** -- Cache misses are streamed to the client and written to cache simultaneously.
+- **Request deduplication** -- Concurrent requests for the same uncached blob are coalesced into a single upstream fetch.
 - **Range requests** -- Supports HTTP range requests for efficient blob caching and retrieval.
 - **Registry whitelist** -- Optionally restrict which upstream registries are allowed.
 

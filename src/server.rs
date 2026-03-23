@@ -3,6 +3,7 @@ use axum::{Router, middleware};
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::cache::inflight::InflightTracker;
 use crate::cache::manager::CacheManager;
 use crate::cache::storage::FsStorage;
 use crate::config::AppConfig;
@@ -18,6 +19,7 @@ pub struct AppState {
     pub cache: Arc<CacheManager>,
     pub upstream_client: Arc<UpstreamClient>,
     pub base_url: String,
+    pub blob_inflight: InflightTracker,
 }
 
 /// Build the Axum router with all routes and middleware.
@@ -49,6 +51,7 @@ pub async fn build_router(config: AppConfig) -> AppResult<(Router, Arc<AppState>
         cache,
         upstream_client,
         base_url,
+        blob_inflight: InflightTracker::new(),
     });
 
     let app = Router::new()

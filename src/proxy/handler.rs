@@ -8,6 +8,7 @@ use reqwest::Method;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
+use crate::cache::inflight::Inflight;
 use crate::cache::storage::ByteStream;
 use crate::error::AppError;
 use crate::proxy::rewrite;
@@ -327,7 +328,62 @@ async fn handle_blob_get(
         .await;
     }
 
-    // No range, cache miss — fetch full blob from upstream and tee to cache
+    // No range, cache miss — use singleflight to avoid duplicate upstream fetches.
+    // If another request is already fetching this blob, wait for it to finish
+    // and then serve from cache.
+    match state.blob_inflight.try_register(digest) {
+        Inflight::Waiting(waiter) => {
+            tracing::info!(
+                digest = %digest,
+                "blob fetch already in-flight, waiting for completion"
+            );
+
+            // Wait for the in-flight fetch to complete
+            let _ = waiter.wait().await;
+
+            // Try reading from cache now that the fetch should be done
+            let cache_range = range.map(|r| (r.start, r.end));
+            if let Some((stream, meta)) = state.cache.get_blob_stream(digest, cache_range).await? {
+                tracing::info!(
+                    digest = %digest,
+                    "serving blob from cache after singleflight wait"
+                );
+                return Ok(build_cached_stream_response(stream, &meta));
+            }
+
+            // Cache still miss (the other fetch may have failed) — fall through
+            // to fetch from upstream ourselves. We re-register as owner since
+            // the previous entry was removed.
+            tracing::warn!(
+                digest = %digest,
+                "blob not in cache after singleflight wait, fetching from upstream"
+            );
+            fetch_blob_upstream(state, registry, req_headers, upstream_url, digest).await
+        }
+        Inflight::Owner(guard) => {
+            fetch_blob_upstream_with_guard(
+                state,
+                registry,
+                req_headers,
+                upstream_url,
+                digest,
+                guard,
+            )
+            .await
+        }
+    }
+}
+
+/// Fetch a blob from upstream, tee to cache, and return a streaming response.
+/// This variant holds an `InflightGuard` to notify waiting requests upon completion.
+async fn fetch_blob_upstream_with_guard(
+    state: &AppState,
+    registry: &crate::config::RegistryConfig,
+    req_headers: &HeaderMap,
+    upstream_url: &str,
+    digest: &str,
+    guard: crate::cache::inflight::InflightGuard,
+) -> Result<Response, AppError> {
     let resp = state
         .upstream_client
         .request(
@@ -337,9 +393,19 @@ async fn handle_blob_get(
             req_headers.clone(),
             None,
         )
-        .await?;
+        .await;
+
+    let resp = match resp {
+        Ok(r) => r,
+        Err(e) => {
+            // Drop guard to notify waiters that the fetch failed
+            drop(guard);
+            return Err(e);
+        }
+    };
 
     if !resp.status().is_success() {
+        drop(guard);
         return convert_upstream_response(resp).await;
     }
 
@@ -349,7 +415,6 @@ async fn handle_blob_get(
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
 
-    // No range, cache miss — stream tee to both client and cache (existing behavior)
     let status = resp.status();
 
     let upstream_stream = resp.bytes_stream();
@@ -359,15 +424,20 @@ async fn handle_blob_get(
     // Convert cache receiver into a ByteStream for put_blob_stream
     let cache_stream: ByteStream = Box::pin(tokio_stream::wrappers::ReceiverStream::new(cache_rx));
 
-    // Spawn background task to write cache from stream
+    // Spawn background task to write cache from stream.
+    // The inflight guard is moved here so it is dropped (notifying waiters)
+    // only after the cache write completes.
     let cache = state.cache.clone();
     let digest_owned = digest.to_string();
     let ct_clone = content_type.clone();
     tokio::spawn(async move {
-        if let Err(e) = cache
+        let result = cache
             .put_blob_stream(&digest_owned, cache_stream, ct_clone)
-            .await
-        {
+            .await;
+        // Drop guard after cache write finishes — this notifies all waiters
+        // that the blob is now available in cache.
+        drop(guard);
+        if let Err(e) = result {
             tracing::warn!(error = %e, "failed to cache blob stream");
         }
     });
@@ -451,6 +521,50 @@ async fn handle_blob_get(
     response = response.header(header::ACCEPT_RANGES, "bytes");
 
     Ok(response.body(body).unwrap())
+}
+
+/// Fetch a blob from upstream without an inflight guard (used as fallback
+/// when a singleflight wait completed but the blob was not found in cache).
+async fn fetch_blob_upstream(
+    state: &AppState,
+    registry: &crate::config::RegistryConfig,
+    req_headers: &HeaderMap,
+    upstream_url: &str,
+    digest: &str,
+) -> Result<Response, AppError> {
+    // Register as owner for this retry attempt
+    match state.blob_inflight.try_register(digest) {
+        Inflight::Owner(guard) => {
+            fetch_blob_upstream_with_guard(
+                state,
+                registry,
+                req_headers,
+                upstream_url,
+                digest,
+                guard,
+            )
+            .await
+        }
+        Inflight::Waiting(waiter) => {
+            // Another request started fetching while we were about to retry —
+            // wait for it instead.
+            let _ = waiter.wait().await;
+            let cache_range = None;
+            if let Some((stream, meta)) = state.cache.get_blob_stream(digest, cache_range).await? {
+                return Ok(build_cached_stream_response(stream, &meta));
+            }
+            // If still not in cache, fall back to direct passthrough
+            proxy_passthrough(
+                state,
+                registry,
+                Method::GET,
+                upstream_url,
+                req_headers.clone(),
+                None,
+            )
+            .await
+        }
+    }
 }
 
 /// Pass a request through to upstream without caching.
