@@ -1,5 +1,5 @@
 use crate::config::{AppConfig, RegistryConfig};
-use crate::error::{AppError, AppResult};
+use anyhow::{Context, Result, bail};
 use regex::Regex;
 use std::sync::OnceLock;
 
@@ -23,62 +23,51 @@ fn re_tag() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"^[a-zA-Z0-9_][a-zA-Z0-9._\-]*$").unwrap())
 }
 
-pub fn validate_name(name: &str) -> AppResult<()> {
+fn validate_name(name: &str) -> Result<()> {
     if name.is_empty() {
-        return Err(AppError::BadRequest("empty repository name".into()));
+        bail!("empty repository name");
     }
     for component in name.split('/') {
         if !re_name_component().is_match(component) {
-            return Err(AppError::BadRequest(format!(
-                "invalid name component: {:?}",
-                component
-            )));
+            bail!("invalid name component: {:?}", component);
         }
     }
     Ok(())
 }
 
-pub fn validate_digest(digest: &str) -> AppResult<()> {
-    let (algorithm, hex) = digest.split_once(':').ok_or_else(|| {
-        AppError::BadRequest(format!("invalid digest (missing ':'): {:?}", digest))
-    })?;
+fn validate_digest(digest: &str) -> Result<()> {
+    let (algorithm, hex) = digest
+        .split_once(':')
+        .with_context(|| format!("invalid digest: {:?}", digest))?;
     if !re_digest_algorithm().is_match(algorithm) {
-        return Err(AppError::BadRequest(format!(
-            "invalid digest algorithm: {:?}",
-            algorithm
-        )));
+        bail!("invalid digest algorithm: {:?}", algorithm);
     }
     if !re_digest_hex().is_match(hex) {
-        return Err(AppError::BadRequest(format!(
-            "invalid digest hex: {:?}",
-            hex
-        )));
+        bail!("invalid digest hex: {:?}", hex);
     }
     Ok(())
 }
 
-pub fn validate_reference(reference: &str) -> AppResult<()> {
+fn validate_reference(reference: &str) -> Result<()> {
     if reference.is_empty() {
-        return Err(AppError::BadRequest("empty reference".into()));
+        bail!("empty reference");
     }
     if reference.contains(':') {
-        validate_digest(reference)
+        validate_digest(reference)?;
     } else {
         if reference.len() > 128 {
-            return Err(AppError::BadRequest(format!(
+            bail!(
                 "tag too long ({} chars, max 128): {:?}",
                 reference.len(),
                 reference
-            )));
+            );
         }
         if !re_tag().is_match(reference) {
-            return Err(AppError::BadRequest(format!(
-                "invalid tag: {:?}",
-                reference
-            )));
+            bail!("invalid tag: {:?}", reference);
         }
-        Ok(())
     }
+
+    Ok(())
 }
 
 /// Parsed request path information.
@@ -127,16 +116,16 @@ fn is_registry_host(segment: &str) -> bool {
 ///                   /v2/{registry_host}/{name...}/tags/list
 ///
 /// If the registry host is missing from the path, it defaults to "docker.io".
-pub fn parse_path(path: &str, method: &str) -> AppResult<ParsedPath> {
+pub fn parse_path(path: &str, method: &str) -> Result<ParsedPath> {
     let path = path.trim_start_matches('/');
 
     // Must start with "v2/"
     let rest = path
         .strip_prefix("v2/")
-        .ok_or_else(|| AppError::Internal("path must start with /v2/".into()))?;
+        .context("path must start with /v2/")?;
 
     if rest.is_empty() {
-        return Err(AppError::Internal("path too short".into()));
+        bail!("path too short");
     }
 
     // First segment may be the registry host, or the path may omit it entirely.
@@ -165,7 +154,7 @@ pub fn parse_path(path: &str, method: &str) -> AppResult<ParsedPath> {
     })
 }
 
-fn parse_endpoint(path: &str, method: &str) -> AppResult<(String, PathType, String)> {
+fn parse_endpoint(path: &str, method: &str) -> Result<(String, PathType, String)> {
     // Look for known endpoint markers in the path
     if let Some(idx) = path.find("/manifests/") {
         let name = &path[..idx];
@@ -245,10 +234,7 @@ fn parse_endpoint(path: &str, method: &str) -> AppResult<(String, PathType, Stri
     }
 
     // Fallback: treat entire remaining path as the endpoint
-    Err(AppError::Internal(format!(
-        "unrecognized registry API path: {}",
-        path
-    )))
+    bail!("unrecognized registry API path: {}", path);
 }
 
 /// Resolve a registry name to its configuration.

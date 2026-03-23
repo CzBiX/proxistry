@@ -1,3 +1,4 @@
+use anyhow::{Context, Result, bail};
 use http::header;
 use reqwest::header::{AUTHORIZATION, HeaderMap, USER_AGENT};
 use reqwest::{Client, Method, Response, StatusCode};
@@ -6,7 +7,6 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, Semaphore};
 
 use crate::config::{AppConfig, RegistryConfig};
-use crate::error::{AppError, AppResult};
 use crate::registry::auth::AuthManager;
 
 /// HTTP client for communicating with upstream registries.
@@ -23,7 +23,7 @@ pub struct UpstreamClient {
 }
 
 impl UpstreamClient {
-    pub fn new(config: Arc<AppConfig>, auth_manager: Arc<AuthManager>) -> AppResult<Self> {
+    pub fn new(config: Arc<AppConfig>, auth_manager: Arc<AuthManager>) -> anyhow::Result<Self> {
         let mut clients = HashMap::new();
         let mut semaphores = HashMap::new();
 
@@ -45,7 +45,7 @@ impl UpstreamClient {
     }
 
     /// Get or create an HTTP client for the given registry.
-    async fn get_or_create_client(&self, registry: &RegistryConfig) -> AppResult<Client> {
+    async fn get_or_create_client(&self, registry: &RegistryConfig) -> anyhow::Result<Client> {
         let mut clients = self.clients.lock().await;
         if let Some(client) = clients.get(&registry.name) {
             return Ok(client.clone());
@@ -75,7 +75,7 @@ impl UpstreamClient {
         url: &str,
         headers: HeaderMap,
         body: Option<impl Into<reqwest::Body>>,
-    ) -> AppResult<Response> {
+    ) -> Result<Response> {
         let (client, mut req, _permit) = self
             .prepare_request(registry, method.clone(), url, &headers)
             .await?;
@@ -89,9 +89,7 @@ impl UpstreamClient {
         // Handle 401 - try token exchange
         if resp.status() == StatusCode::UNAUTHORIZED {
             if has_body {
-                return Err(AppError::Internal(
-                    "cannot retry request with body after 401".to_string(),
-                ));
+                bail!("cannot retry request with body after 401");
             }
 
             let resp_headers = resp.headers().clone();
@@ -123,7 +121,7 @@ impl UpstreamClient {
         method: Method,
         url: &str,
         headers: &HeaderMap,
-    ) -> AppResult<(
+    ) -> Result<(
         Client,
         reqwest::RequestBuilder,
         Option<tokio::sync::OwnedSemaphorePermit>,
@@ -133,11 +131,7 @@ impl UpstreamClient {
         let permit = {
             let semaphores = self.semaphores.lock().await;
             match semaphores.get(&registry.name).cloned() {
-                Some(sem) => Some(
-                    sem.acquire_owned()
-                        .await
-                        .map_err(|e| AppError::Internal(format!("semaphore error: {}", e)))?,
-                ),
+                Some(sem) => Some(sem.acquire_owned().await.context("semaphore closed")?),
                 None => None,
             }
         };
@@ -198,7 +192,7 @@ impl UpstreamClient {
     }
 }
 
-fn build_client(registry: &RegistryConfig) -> AppResult<Client> {
+fn build_client(registry: &RegistryConfig) -> anyhow::Result<Client> {
     let mut builder = Client::builder();
 
     let tls = &registry.tls;
@@ -206,19 +200,11 @@ fn build_client(registry: &RegistryConfig) -> AppResult<Client> {
         builder = builder.danger_accept_invalid_certs(true);
     }
     if let Some(ref ca_cert_path) = tls.ca_cert {
-        let cert_data = std::fs::read(ca_cert_path).map_err(|e| {
-            AppError::Config(format!(
-                "failed to read CA cert {}: {}",
-                ca_cert_path.display(),
-                e
-            ))
-        })?;
-        let cert = reqwest::Certificate::from_pem(&cert_data)
-            .map_err(|e| AppError::Config(format!("invalid CA cert: {}", e)))?;
+        let cert_data = std::fs::read(ca_cert_path)
+            .with_context(|| format!("failed to read CA cert {}", ca_cert_path.display()))?;
+        let cert = reqwest::Certificate::from_pem(&cert_data).context("invalid CA cert")?;
         builder = builder.add_root_certificate(cert);
     }
 
-    builder
-        .build()
-        .map_err(|e| AppError::Config(format!("failed to build HTTP client: {}", e)))
+    builder.build().context("failed to build HTTP client")
 }

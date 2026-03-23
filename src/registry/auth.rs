@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use anyhow::{Context, Result, bail};
 use base64::Engine;
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
@@ -8,7 +9,6 @@ use reqwest::header::{HeaderMap, HeaderValue, WWW_AUTHENTICATE};
 use serde::Deserialize;
 
 use crate::config::AuthConfig;
-use crate::error::{AppError, AppResult};
 
 /// A cached auth token with its expiry.
 #[derive(Debug, Clone)]
@@ -36,13 +36,12 @@ impl AuthManager {
     }
 
     /// Build a Bearer authorization header from a raw token string.
-    fn bearer_header(token: &str) -> AppResult<HeaderValue> {
-        HeaderValue::from_str(&format!("Bearer {}", token))
-            .map_err(|e| AppError::Auth(format!("invalid header value: {}", e)))
+    fn bearer_header(token: &str) -> Result<HeaderValue> {
+        HeaderValue::from_str(&format!("Bearer {}", token)).context("invalid header value")
     }
 
     /// Return a cached bearer token header if one exists and hasn't expired.
-    fn cached_token_header(&self, registry_name: &str) -> AppResult<Option<HeaderValue>> {
+    fn cached_token_header(&self, registry_name: &str) -> Result<Option<HeaderValue>> {
         if let Some(cached) = self.token_cache.get(registry_name) {
             if cached.expires_at > Utc::now() {
                 tracing::debug!(registry = %registry_name, "using cached auth token");
@@ -59,7 +58,7 @@ impl AuthManager {
         &self,
         registry_name: &str,
         auth_config: Option<&AuthConfig>,
-    ) -> AppResult<Option<HeaderValue>> {
+    ) -> Result<Option<HeaderValue>> {
         // Check token cache first — a previously exchanged token takes priority
         if let Some(val) = self.cached_token_header(registry_name)? {
             return Ok(Some(val));
@@ -86,7 +85,7 @@ impl AuthManager {
                 let encoded = base64::engine::general_purpose::STANDARD
                     .encode(format!("{}:{}", username, pass));
                 let val = HeaderValue::from_str(&format!("Basic {}", encoded))
-                    .map_err(|e| AppError::Auth(format!("invalid header value: {}", e)))?;
+                    .context("invalid header value")?;
                 Ok(Some(val))
             }
             AuthConfig::Bearer { token, .. } => {
@@ -103,7 +102,7 @@ impl AuthManager {
         registry_name: &str,
         auth_config: Option<&AuthConfig>,
         response_headers: &HeaderMap,
-    ) -> AppResult<Option<HeaderValue>> {
+    ) -> Result<Option<HeaderValue>> {
         let www_auth = match response_headers.get(WWW_AUTHENTICATE) {
             Some(v) => v.to_str().unwrap_or("").to_string(),
             None => {
@@ -132,7 +131,7 @@ impl AuthManager {
         );
 
         if realm.is_empty() {
-            return Err(AppError::Auth("empty realm in WWW-Authenticate".into()));
+            bail!("empty realm in WWW-Authenticate");
         }
 
         // Check token cache
@@ -160,28 +159,22 @@ impl AuthManager {
             req = req.basic_auth(user, Some(pass));
         }
 
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| AppError::Auth(format!("token exchange failed: {}", e)))?;
+        let resp = req.send().await.context("token exchange failed")?;
 
         if !resp.status().is_success() {
             tracing::warn!(registry = %registry_name, status = %resp.status(), "token exchange failed");
-            return Err(AppError::Auth(format!(
-                "token exchange returned {}",
-                resp.status()
-            )));
+            bail!("token exchange returned {}", resp.status());
         }
 
         let token_resp: TokenResponse = resp
             .json()
             .await
-            .map_err(|e| AppError::Auth(format!("failed to parse token response: {}", e)))?;
+            .context("failed to parse token response")?;
 
         let token = token_resp
             .token
             .or(token_resp.access_token)
-            .ok_or_else(|| AppError::Auth("no token in response".into()))?;
+            .context("no token in response")?;
 
         let expires_in = token_resp.expires_in.unwrap_or(300);
         let expires_at = Utc::now() + chrono::Duration::seconds(expires_in.max(30) as i64 - 30);

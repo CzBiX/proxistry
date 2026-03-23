@@ -1,3 +1,4 @@
+use anyhow::Result;
 use axum::body::Body;
 use axum::extract::{Request, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
@@ -81,7 +82,8 @@ pub async fn proxy_handler(
     let headers = req.headers().clone();
 
     // Parse the path
-    let parsed = routing::parse_path(&path, method.as_str())?;
+    let parsed = routing::parse_path(&path, method.as_str())
+        .map_err(|err| AppError::BadRequest(err.to_string()))?;
 
     // Check whitelist
     if !routing::is_whitelisted(&state.config, &parsed.registry) {
@@ -106,7 +108,7 @@ pub async fn proxy_handler(
         "handling request"
     );
 
-    match &parsed.path_type {
+    let resp = match &parsed.path_type {
         PathType::Manifest { reference } => {
             handle_manifest_get(
                 &state,
@@ -189,7 +191,9 @@ pub async fn proxy_handler(
             }
             Ok(resp)
         }
-    }
+    }?;
+
+    Ok(resp)
 }
 
 /// Handle GET/HEAD for manifests with caching.
@@ -200,7 +204,7 @@ async fn handle_manifest_get(
     req_headers: &HeaderMap,
     upstream_url: &str,
     reference: &str,
-) -> Result<Response, AppError> {
+) -> Result<Response> {
     // Check cache first
     if let Some((data, meta)) = state
         .cache
@@ -287,7 +291,7 @@ async fn handle_blob_get(
     req_headers: &HeaderMap,
     upstream_url: &str,
     digest: &str,
-) -> Result<Response, AppError> {
+) -> Result<Response> {
     let range = parse_range_header(req_headers);
 
     // Check cache first
@@ -385,7 +389,7 @@ async fn fetch_blob_upstream_with_guard(
     upstream_url: &str,
     digest: &str,
     guard: crate::cache::inflight::InflightGuard,
-) -> Result<Response, AppError> {
+) -> Result<Response> {
     let resp = state
         .upstream_client
         .request(
@@ -533,7 +537,7 @@ async fn fetch_blob_upstream(
     req_headers: &HeaderMap,
     upstream_url: &str,
     digest: &str,
-) -> Result<Response, AppError> {
+) -> Result<Response> {
     // Register as owner for this retry attempt
     match state.blob_inflight.try_register(digest) {
         Inflight::Owner(guard) => {
@@ -577,7 +581,7 @@ async fn proxy_passthrough(
     url: &str,
     headers: HeaderMap,
     body: Option<impl Into<reqwest::Body>>,
-) -> Result<Response, AppError> {
+) -> Result<Response> {
     let resp = state
         .upstream_client
         .request(registry, method, url, headers, body)
@@ -587,7 +591,7 @@ async fn proxy_passthrough(
 }
 
 /// Convert a reqwest::Response to a streaming axum::Response.
-fn convert_upstream_response_stream(resp: reqwest::Response) -> Result<Response, AppError> {
+fn convert_upstream_response_stream(resp: reqwest::Response) -> Result<Response> {
     let status = resp.status();
     let headers = resp.headers().clone();
 

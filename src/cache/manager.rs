@@ -6,7 +6,6 @@ use std::time::Duration;
 use crate::cache::key;
 use crate::cache::storage::{ByteStream, CacheMetadata, StorageBackend};
 use crate::config::AppConfig;
-use crate::error::AppResult;
 
 /// Cache statistics.
 #[derive(Debug)]
@@ -62,7 +61,7 @@ impl CacheManager {
         registry: &str,
         name: &str,
         reference: &str,
-    ) -> AppResult<Option<(Bytes, CacheMetadata)>> {
+    ) -> anyhow::Result<Option<(Bytes, CacheMetadata)>> {
         // If reference is a tag, look up digest from index first
         let cache_key = if key::is_digest(reference) {
             key::manifest_key(registry, name, reference)
@@ -119,7 +118,7 @@ impl CacheManager {
         data: Bytes,
         content_type: Option<String>,
         digest: Option<String>,
-    ) -> AppResult<()> {
+    ) -> anyhow::Result<()> {
         let actual_digest = digest.as_deref().unwrap_or(reference);
         let cache_key = key::manifest_key(registry, name, actual_digest);
         let meta = CacheMetadata::new(data.len() as u64, content_type, digest.clone());
@@ -148,7 +147,7 @@ impl CacheManager {
         &self,
         digest: &str,
         range: Option<(u64, Option<u64>)>,
-    ) -> AppResult<Option<(ByteStream, CacheMetadata)>> {
+    ) -> anyhow::Result<Option<(ByteStream, CacheMetadata)>> {
         let cache_key = key::blob_key(digest);
         let ttl = self.config.cache.blob_ttl;
 
@@ -177,7 +176,7 @@ impl CacheManager {
         digest: &str,
         stream: ByteStream,
         content_type: Option<String>,
-    ) -> AppResult<u64> {
+    ) -> anyhow::Result<u64> {
         let cache_key = key::blob_key(digest);
         // Size will be updated by put_stream after writing completes
         let meta = CacheMetadata::new(0, content_type, Some(digest.to_string()));
@@ -192,7 +191,7 @@ impl CacheManager {
         registry: &str,
         name: &str,
         reference: &str,
-    ) -> AppResult<()> {
+    ) -> anyhow::Result<()> {
         let cache_key = key::manifest_key(registry, name, reference);
         self.storage.delete(&cache_key).await?;
 
@@ -204,20 +203,20 @@ impl CacheManager {
     }
 
     /// Invalidate a blob entry.
-    pub async fn invalidate_blob(&self, digest: &str) -> AppResult<()> {
+    pub async fn invalidate_blob(&self, digest: &str) -> anyhow::Result<()> {
         let cache_key = key::blob_key(digest);
         self.storage.delete(&cache_key).await?;
         Ok(())
     }
 
     /// Run LRU eviction to bring cache under max size.
-    pub async fn run_eviction(&self) -> AppResult<u64> {
+    pub async fn run_eviction(&self) -> anyhow::Result<u64> {
         let max_bytes = self.config.cache.max_size_gb * 1024 * 1024 * 1024;
         self.storage.evict_lru(max_bytes).await
     }
 
     /// Get total cached size.
-    pub async fn total_size(&self) -> AppResult<u64> {
+    pub async fn total_size(&self) -> anyhow::Result<u64> {
         self.storage.total_size().await
     }
 

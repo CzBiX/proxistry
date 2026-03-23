@@ -1,3 +1,4 @@
+use axum::extract::State;
 use axum::routing::{any, get};
 use axum::{Router, middleware};
 use std::sync::Arc;
@@ -7,7 +8,6 @@ use crate::cache::inflight::InflightTracker;
 use crate::cache::manager::CacheManager;
 use crate::cache::storage::FsStorage;
 use crate::config::AppConfig;
-use crate::error::AppResult;
 use crate::middleware::logging::logging_middleware;
 use crate::proxy::client::UpstreamClient;
 use crate::proxy::handler;
@@ -23,7 +23,7 @@ pub struct AppState {
 }
 
 /// Build the Axum router with all routes and middleware.
-pub async fn build_router(config: AppConfig) -> AppResult<(Router, Arc<AppState>)> {
+pub async fn build_router(config: AppConfig) -> anyhow::Result<(Router, Arc<AppState>)> {
     let config = Arc::new(config);
 
     // Initialize storage backend
@@ -89,9 +89,7 @@ pub fn spawn_background_tasks(state: Arc<AppState>) {
 }
 
 /// GET /_/stats — cache statistics.
-async fn stats_handler(
-    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
-) -> impl axum::response::IntoResponse {
+async fn stats_handler(State(state): State<Arc<AppState>>) -> impl axum::response::IntoResponse {
     let total_size = state.cache.total_size().await.unwrap_or(0);
     let hits = state.cache.stats.hit_count();
     let misses = state.cache.stats.miss_count();

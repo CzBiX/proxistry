@@ -1,3 +1,4 @@
+use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
@@ -8,8 +9,6 @@ use std::pin::Pin;
 use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader};
 use tokio_util::io::ReaderStream;
-
-use crate::error::{AppError, AppResult};
 
 /// A boxed byte stream for streaming reads from storage.
 pub type ByteStream = Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>>;
@@ -42,10 +41,10 @@ impl CacheMetadata {
 #[async_trait]
 pub trait StorageBackend: Send + Sync {
     /// Read data by key (buffered). Returns None if not found.
-    async fn get(&self, key: &str) -> AppResult<Option<(Bytes, CacheMetadata)>>;
+    async fn get(&self, key: &str) -> Result<Option<(Bytes, CacheMetadata)>>;
 
     /// Write data by key (buffered).
-    async fn put(&self, key: &str, data: Bytes, meta: CacheMetadata) -> AppResult<()>;
+    async fn put(&self, key: &str, data: Bytes, meta: CacheMetadata) -> Result<()>;
 
     /// Read data by key as a byte stream. Returns None if not found.
     /// Suitable for large blobs that should not be fully loaded into memory.
@@ -59,27 +58,22 @@ pub trait StorageBackend: Send + Sync {
         &self,
         key: &str,
         range: Option<(u64, Option<u64>)>,
-    ) -> AppResult<Option<(ByteStream, CacheMetadata)>>;
+    ) -> Result<Option<(ByteStream, CacheMetadata)>>;
 
     /// Write data by key from a byte stream.
     /// Writes chunks to storage as they arrive, suitable for large blobs.
     /// Returns the total number of bytes written.
-    async fn put_stream(
-        &self,
-        key: &str,
-        stream: ByteStream,
-        meta: CacheMetadata,
-    ) -> AppResult<u64>;
+    async fn put_stream(&self, key: &str, stream: ByteStream, meta: CacheMetadata) -> Result<u64>;
 
     /// Delete a key. Returns true if it existed.
-    async fn delete(&self, key: &str) -> AppResult<bool>;
+    async fn delete(&self, key: &str) -> Result<bool>;
 
     /// Total size of all cached data in bytes.
-    async fn total_size(&self) -> AppResult<u64>;
+    async fn total_size(&self) -> Result<u64>;
 
     /// Evict entries by LRU until total size is at or below target_size.
     /// Returns the number of bytes freed.
-    async fn evict_lru(&self, target_size: u64) -> AppResult<u64>;
+    async fn evict_lru(&self, target_size: u64) -> Result<u64>;
 }
 
 /// Filesystem-based storage backend.
@@ -88,26 +82,26 @@ pub struct FsStorage {
 }
 
 impl FsStorage {
-    pub async fn new(base_dir: PathBuf) -> AppResult<Self> {
+    pub async fn new(base_dir: PathBuf) -> Result<Self> {
         fs::create_dir_all(&base_dir)
             .await
-            .map_err(|e| AppError::Cache(format!("failed to create cache dir: {}", e)))?;
+            .context("failed to create cache dir")?;
         Ok(Self { base_dir })
     }
 
-    fn check_path(path: PathBuf) -> AppResult<PathBuf> {
+    fn check_path(path: PathBuf) -> Result<PathBuf> {
         if path.components().any(|c| c == Component::ParentDir) {
-            return Err(AppError::Cache(format!("invalid cache key: {:?}", path)));
+            bail!("invalid cache key: {:?}", path);
         }
 
         Ok(path)
     }
 
-    fn data_path(&self, key: &str) -> AppResult<PathBuf> {
+    fn data_path(&self, key: &str) -> Result<PathBuf> {
         Self::check_path(self.base_dir.join(key))
     }
 
-    fn meta_path(&self, key: &str) -> AppResult<PathBuf> {
+    fn meta_path(&self, key: &str) -> Result<PathBuf> {
         let mut p = self.base_dir.join(key);
         let mut name = p.file_name().unwrap_or_default().to_os_string();
         name.push(".meta");
@@ -115,26 +109,24 @@ impl FsStorage {
         Self::check_path(p)
     }
 
-    async fn read_meta(&self, key: &str) -> AppResult<Option<CacheMetadata>> {
+    async fn read_meta(&self, key: &str) -> Result<Option<CacheMetadata>> {
         let meta_path = self.meta_path(key)?;
         if !meta_path.exists() {
             return Ok(None);
         }
         let data = fs::read(&meta_path)
             .await
-            .map_err(|e| AppError::Cache(format!("read meta {}: {}", meta_path.display(), e)))?;
-        let meta: CacheMetadata = serde_json::from_slice(&data)
-            .map_err(|e| AppError::Cache(format!("parse meta: {}", e)))?;
+            .with_context(|| format!("read meta {}", meta_path.display()))?;
+        let meta: CacheMetadata = serde_json::from_slice(&data).context("parse meta")?;
         Ok(Some(meta))
     }
 
-    async fn write_meta(&self, key: &str, meta: &CacheMetadata) -> AppResult<()> {
+    async fn write_meta(&self, key: &str, meta: &CacheMetadata) -> Result<()> {
         let meta_path = self.meta_path(key)?;
         if let Some(parent) = meta_path.parent() {
             fs::create_dir_all(parent).await?;
         }
-        let data = serde_json::to_vec(meta)
-            .map_err(|e| AppError::Cache(format!("serialize meta: {}", e)))?;
+        let data = serde_json::to_vec(meta).context("serialize meta")?;
         let mut file = fs::File::create(&meta_path).await?;
         file.write_all(&data).await?;
         file.flush().await?;
@@ -142,7 +134,7 @@ impl FsStorage {
     }
 
     /// Recursively collect all cached entries with their metadata for eviction.
-    async fn collect_entries(&self) -> AppResult<Vec<(String, CacheMetadata)>> {
+    async fn collect_entries(&self) -> Result<Vec<(String, CacheMetadata)>> {
         let mut entries = Vec::new();
         self.scan_dir(&self.base_dir, &self.base_dir, &mut entries)
             .await?;
@@ -155,7 +147,7 @@ impl FsStorage {
         dir: &Path,
         base: &Path,
         entries: &mut Vec<(String, CacheMetadata)>,
-    ) -> AppResult<()> {
+    ) -> Result<()> {
         let mut read_dir = match fs::read_dir(dir).await {
             Ok(rd) => rd,
             Err(_) => return Ok(()),
@@ -186,7 +178,7 @@ impl FsStorage {
 
 #[async_trait]
 impl StorageBackend for FsStorage {
-    async fn get(&self, key: &str) -> AppResult<Option<(Bytes, CacheMetadata)>> {
+    async fn get(&self, key: &str) -> Result<Option<(Bytes, CacheMetadata)>> {
         let data_path = self.data_path(key)?;
         if !data_path.exists() {
             return Ok(None);
@@ -194,7 +186,7 @@ impl StorageBackend for FsStorage {
 
         let data = fs::read(&data_path)
             .await
-            .map_err(|e| AppError::Cache(format!("read {}: {}", data_path.display(), e)))?;
+            .with_context(|| format!("read {}", data_path.display()))?;
 
         let meta = match self.read_meta(key).await? {
             Some(m) => m,
@@ -212,7 +204,7 @@ impl StorageBackend for FsStorage {
         Ok(Some((Bytes::from(data), updated_meta)))
     }
 
-    async fn put(&self, key: &str, data: Bytes, meta: CacheMetadata) -> AppResult<()> {
+    async fn put(&self, key: &str, data: Bytes, meta: CacheMetadata) -> Result<()> {
         let data_path = self.data_path(key)?;
         if let Some(parent) = data_path.parent() {
             fs::create_dir_all(parent).await?;
@@ -230,7 +222,7 @@ impl StorageBackend for FsStorage {
         &self,
         key: &str,
         range: Option<(u64, Option<u64>)>,
-    ) -> AppResult<Option<(ByteStream, CacheMetadata)>> {
+    ) -> Result<Option<(ByteStream, CacheMetadata)>> {
         let data_path = self.data_path(key)?;
         if !data_path.exists() {
             return Ok(None);
@@ -245,10 +237,7 @@ impl StorageBackend for FsStorage {
         let (start, end) = match range {
             Some((s, e)) => {
                 if s >= file_size {
-                    return Err(AppError::Cache(format!(
-                        "range start {} beyond file size {}",
-                        s, file_size
-                    )));
+                    bail!("range start {} beyond file size {}", s, file_size);
                 }
                 (s, e.map(|v| v.min(file_size - 1)).unwrap_or(file_size - 1))
             }
@@ -264,12 +253,12 @@ impl StorageBackend for FsStorage {
 
         let mut file = fs::File::open(&data_path)
             .await
-            .map_err(|e| AppError::Cache(format!("open {}: {}", data_path.display(), e)))?;
+            .with_context(|| format!("open {}", data_path.display()))?;
 
         if start > 0 {
             file.seek(std::io::SeekFrom::Start(start))
                 .await
-                .map_err(|e| AppError::Cache(format!("seek {}: {}", data_path.display(), e)))?;
+                .with_context(|| format!("seek {}", data_path.display()))?;
         }
 
         let range_len = end - start + 1;
@@ -279,12 +268,7 @@ impl StorageBackend for FsStorage {
         Ok(Some((stream, updated_meta)))
     }
 
-    async fn put_stream(
-        &self,
-        key: &str,
-        stream: ByteStream,
-        meta: CacheMetadata,
-    ) -> AppResult<u64> {
+    async fn put_stream(&self, key: &str, stream: ByteStream, meta: CacheMetadata) -> Result<u64> {
         use futures::StreamExt;
 
         let data_path = self.data_path(key)?;
@@ -297,7 +281,7 @@ impl StorageBackend for FsStorage {
 
         let mut stream = std::pin::pin!(stream);
         while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|e| AppError::Cache(format!("stream read error: {}", e)))?;
+            let chunk = chunk.context("stream read error")?;
             total_bytes += chunk.len() as u64;
             file.write_all(&chunk).await?;
         }
@@ -312,7 +296,7 @@ impl StorageBackend for FsStorage {
         Ok(total_bytes)
     }
 
-    async fn delete(&self, key: &str) -> AppResult<bool> {
+    async fn delete(&self, key: &str) -> Result<bool> {
         let data_path = self.data_path(key)?;
         let meta_path = self.meta_path(key)?;
         let existed = data_path.exists();
@@ -327,12 +311,12 @@ impl StorageBackend for FsStorage {
         Ok(existed)
     }
 
-    async fn total_size(&self) -> AppResult<u64> {
+    async fn total_size(&self) -> Result<u64> {
         let entries = self.collect_entries().await?;
         Ok(entries.iter().map(|(_, meta)| meta.size).sum())
     }
 
-    async fn evict_lru(&self, target_size: u64) -> AppResult<u64> {
+    async fn evict_lru(&self, target_size: u64) -> Result<u64> {
         let mut entries = self.collect_entries().await?;
         let current_size: u64 = entries.iter().map(|(_, meta)| meta.size).sum();
 

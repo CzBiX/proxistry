@@ -1,8 +1,7 @@
+use anyhow::{Context, bail};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-
-use crate::error::AppError;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(default)]
@@ -127,11 +126,10 @@ pub struct TlsConfig {
 }
 
 impl AppConfig {
-    pub fn load(path: &Path) -> Result<Self, AppError> {
+    pub fn load(path: &Path) -> anyhow::Result<Self> {
         let content = std::fs::read_to_string(path);
         let mut config = match content {
-            Ok(content) => toml::from_str(&content)
-                .map_err(|e| AppError::Config(format!("failed to parse config: {}", e)))?,
+            Ok(content) => toml::from_str(&content).context("failed to parse config")?,
             Err(e) => {
                 tracing::warn!(path = %path.display(), error = %e, "read config failed, using defaults");
                 AppConfig::default()
@@ -142,10 +140,10 @@ impl AppConfig {
         Ok(config)
     }
 
-    fn validate(&mut self) -> Result<(), AppError> {
+    fn validate(&mut self) -> anyhow::Result<()> {
         for reg in &mut self.registries {
             if reg.name.is_empty() {
-                return Err(AppError::Config("registry name cannot be empty".into()));
+                bail!("registry name cannot be empty");
             }
             if reg.url.is_empty() {
                 if reg.name == "docker.io" {
@@ -184,11 +182,7 @@ impl AppConfig {
                         );
                     }
                     Err(e) => {
-                        return Err(AppError::Config(format!(
-                            "failed to read password file {}: {}",
-                            path.display(),
-                            e
-                        )));
+                        bail!("failed to read password file {}: {}", path.display(), e);
                     }
                 }
             }
