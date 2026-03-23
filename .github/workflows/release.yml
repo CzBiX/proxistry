@@ -83,7 +83,7 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-            type=ref
+            type=ref,event=workflow_dispatch
     
       - name: Build and push
         uses: docker/build-push-action@v6
