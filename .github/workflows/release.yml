@@ -3,6 +3,7 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
@@ -76,11 +77,13 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           flavor: |
+            prefix=${{ github.event_name == 'workflow_dispatch' && 'dev-' || '' }}
             suffix=-${{ matrix.arch }},onlatest=true
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
+            type=ref
     
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -99,6 +102,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+    if: github.event_name != 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v6
 
@@ -137,6 +141,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    if: github.event_name != 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v6
 
