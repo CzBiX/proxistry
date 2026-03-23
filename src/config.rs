@@ -25,7 +25,7 @@ pub struct ServerConfig {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
-            listen: "0.0.0.0:8000".to_string(),
+            listen: "0.0.0.0:5000".to_string(),
             base_url: None,
             concurrent: 10,
         }
