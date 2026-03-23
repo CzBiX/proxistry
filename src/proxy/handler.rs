@@ -121,8 +121,8 @@ pub async fn proxy_handler(
         PathType::Blob { digest } => {
             handle_blob_get(&state, &registry, &parsed, &headers, &upstream_url, digest).await
         }
-        PathType::TagsList => {
-            // Always proxy tags list, never cache
+        PathType::TagsList | PathType::Referrers { .. } => {
+            // Always proxy tags list and referrers API, never cache
             proxy_passthrough(&state, &registry, Method::GET, &upstream_url, headers, None).await
         }
         PathType::BlobUpload { .. } => {

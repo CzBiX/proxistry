@@ -109,6 +109,8 @@ pub enum PathType {
     ManifestDelete { reference: String },
     /// DELETE /v2/{name}/blobs/{digest}
     BlobDelete { digest: String },
+    /// GET /v2/{name}/referrers/{digest}
+    Referrers { digest: String },
     /// Other/unknown
     Other,
 }
@@ -220,6 +222,20 @@ fn parse_endpoint(path: &str, method: &str) -> AppResult<(String, PathType, Stri
         return Ok((name.to_string(), path_type, format!("blobs/{}", digest)));
     }
 
+    if let Some(idx) = path.find("/referrers/") {
+        let name = &path[..idx];
+        let digest = &path[idx + "/referrers/".len()..];
+        validate_name(name)?;
+        validate_digest(digest)?;
+        return Ok((
+            name.to_string(),
+            PathType::Referrers {
+                digest: digest.to_string(),
+            },
+            format!("referrers/{}", digest),
+        ));
+    }
+
     if let Some(idx) = path.find("/tags/list") {
         let name = &path[..idx];
         validate_name(name)?;
@@ -312,6 +328,38 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_blob_upload_path_with_args() {
+        let parsed = parse_path(
+            "/v2/docker.io/library/nginx/blobs/uploads/?digest=foo",
+            "POST",
+        )
+        .unwrap();
+        assert_eq!(parsed.registry, "docker.io");
+        assert_eq!(parsed.name, "library/nginx");
+        assert!(matches!(parsed.path_type, PathType::BlobUpload { .. }));
+        assert_eq!(
+            parsed.upstream_path,
+            "/v2/library/nginx/blobs/uploads/?digest=foo"
+        );
+    }
+
+    #[test]
+    fn test_parse_blob_upload_path_with_ref_and_args() {
+        let parsed = parse_path(
+            "/v2/docker.io/library/nginx/blobs/uploads/ref?digest=foo",
+            "POST",
+        )
+        .unwrap();
+        assert_eq!(parsed.registry, "docker.io");
+        assert_eq!(parsed.name, "library/nginx");
+        assert!(matches!(parsed.path_type, PathType::BlobUpload { .. }));
+        assert_eq!(
+            parsed.upstream_path,
+            "/v2/library/nginx/blobs/uploads/ref?digest=foo"
+        );
+    }
+
+    #[test]
     fn test_parse_delete_manifest() {
         let parsed =
             parse_path("/v2/docker.io/library/nginx/manifests/sha256:abc", "DELETE").unwrap();
@@ -328,6 +376,31 @@ mod tests {
             parsed.path_type,
             PathType::BlobDelete { ref digest } if digest == "sha256:abc"
         ));
+    }
+
+    #[test]
+    fn test_parse_referrers_path() {
+        let parsed =
+            parse_path("/v2/docker.io/library/nginx/referrers/sha256:abc123", "GET").unwrap();
+        assert_eq!(parsed.registry, "docker.io");
+        assert_eq!(parsed.name, "library/nginx");
+        assert_eq!(
+            parsed.upstream_path,
+            "/v2/library/nginx/referrers/sha256:abc123"
+        );
+        assert!(
+            matches!(parsed.path_type, PathType::Referrers { ref digest } if digest == "sha256:abc123")
+        );
+    }
+
+    #[test]
+    fn test_parse_referrers_path_missing_registry() {
+        let parsed = parse_path("/v2/library/nginx/referrers/sha256:abc123", "GET").unwrap();
+        assert_eq!(parsed.registry, "docker.io");
+        assert_eq!(parsed.name, "library/nginx");
+        assert!(
+            matches!(parsed.path_type, PathType::Referrers { ref digest } if digest == "sha256:abc123")
+        );
     }
 
     #[test]
