@@ -15,7 +15,7 @@ RUN cargo build --locked --release
 FROM gcr.io/distroless/cc-debian13
 
 COPY --from=builder /app/target/release/proxistry /
-EXPOSE 8000
+EXPOSE 5000
 
 ENTRYPOINT ["./proxistry"]
 CMD ["--config", "/etc/proxistry/config.toml"]
