@@ -19,7 +19,7 @@ jobs:
             runner: ubuntu-24.04
           - arch: linux-arm64
             runner: ubuntu-24.04-arm
-          - arch: darwin-amd64
+          - arch: darwin-arm64
             runner: macos-latest
     steps:
       - uses: actions/checkout@v6
