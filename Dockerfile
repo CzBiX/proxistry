@@ -1,4 +1,4 @@
-FROM rust:1.94-bookworm AS builder
+FROM rust:1.94-slim AS builder
 
 WORKDIR /app
 
@@ -12,7 +12,7 @@ COPY src ./src
 RUN cargo build --locked --release
 
 # Runtime stage
-FROM gcr.io/distroless/cc-debian13
+FROM gcr.io/distroless/cc-debian13:nonroot
 
 COPY --from=builder /app/target/release/proxistry /
 EXPOSE 5000
