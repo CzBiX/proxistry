@@ -113,11 +113,20 @@ pub enum PathType {
     Other,
 }
 
+/// Check if a path segment looks like a registry host.
+/// Registry hosts contain a dot (e.g., "docker.io", "ghcr.io") or a colon for port
+/// (e.g., "localhost:5000").
+fn is_registry_host(segment: &str) -> bool {
+    segment.contains('.') || segment.contains(':')
+}
+
 /// Parse a request path into its components.
 /// Expected format: /v2/{registry_host}/{name...}/manifests/{reference}
 ///                   /v2/{registry_host}/{name...}/blobs/{digest}
 ///                   /v2/{registry_host}/{name...}/blobs/uploads/...
 ///                   /v2/{registry_host}/{name...}/tags/list
+///
+/// If the registry host is missing from the path, it defaults to "docker.io".
 pub fn parse_path(path: &str, method: &str) -> AppResult<ParsedPath> {
     let path = path.trim_start_matches('/');
 
@@ -130,20 +139,26 @@ pub fn parse_path(path: &str, method: &str) -> AppResult<ParsedPath> {
         return Err(AppError::Internal("path too short".into()));
     }
 
-    // First segment is the registry host
-    let (registry, remainder) = rest
-        .split_once('/')
-        .ok_or_else(|| AppError::Internal("path must contain registry and name".into()))?;
+    // First segment may be the registry host, or the path may omit it entirely.
+    // If the first segment doesn't look like a host, default to "docker.io".
+    let (registry, remainder) = match rest.split_once('/') {
+        Some((first, rem)) if is_registry_host(first) => (first.to_string(), rem.to_string()),
+        _ => {
+            // No registry host in the path; default to docker.io and treat
+            // the entire rest as the remainder (name + endpoint).
+            ("docker.io".to_string(), rest.to_string())
+        }
+    };
 
     // Parse the remaining segments to find the endpoint type
     // The name can contain slashes (e.g., "library/nginx")
     // We need to find the endpoint marker: manifests/, blobs/, tags/
-    let (name, path_type, endpoint_path) = parse_endpoint(remainder, method)?;
+    let (name, path_type, endpoint_path) = parse_endpoint(&remainder, method)?;
 
     let upstream_path = format!("/v2/{}/{}", name, endpoint_path);
 
     Ok(ParsedPath {
-        registry: registry.to_string(),
+        registry,
         upstream_path,
         name: name.to_string(),
         path_type,
@@ -337,6 +352,70 @@ mod tests {
     fn test_parse_path_unrecognized_endpoint() {
         let result = parse_path("/v2/docker.io/library/nginx/unknown/endpoint", "GET");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_path_missing_registry_defaults_to_docker_io() {
+        let parsed = parse_path("/v2/library/nginx/manifests/latest", "GET").unwrap();
+        assert_eq!(parsed.registry, "docker.io");
+        assert_eq!(parsed.name, "library/nginx");
+        assert_eq!(parsed.upstream_path, "/v2/library/nginx/manifests/latest");
+        assert!(
+            matches!(parsed.path_type, PathType::Manifest { ref reference } if reference == "latest")
+        );
+    }
+
+    #[test]
+    fn test_parse_path_missing_registry_blob() {
+        let parsed = parse_path("/v2/library/nginx/blobs/sha256:abc123", "GET").unwrap();
+        assert_eq!(parsed.registry, "docker.io");
+        assert_eq!(parsed.name, "library/nginx");
+        assert!(
+            matches!(parsed.path_type, PathType::Blob { ref digest } if digest == "sha256:abc123")
+        );
+    }
+
+    #[test]
+    fn test_parse_path_missing_registry_tags_list() {
+        let parsed = parse_path("/v2/library/nginx/tags/list", "GET").unwrap();
+        assert_eq!(parsed.registry, "docker.io");
+        assert_eq!(parsed.name, "library/nginx");
+        assert!(matches!(parsed.path_type, PathType::TagsList));
+    }
+
+    #[test]
+    fn test_parse_path_missing_registry_blob_upload() {
+        let parsed = parse_path("/v2/library/nginx/blobs/uploads/some-uuid", "POST").unwrap();
+        assert_eq!(parsed.registry, "docker.io");
+        assert_eq!(parsed.name, "library/nginx");
+        assert!(matches!(parsed.path_type, PathType::BlobUpload { .. }));
+    }
+
+    #[test]
+    fn test_parse_path_missing_registry_single_name() {
+        let parsed = parse_path("/v2/nginx/manifests/latest", "GET").unwrap();
+        assert_eq!(parsed.registry, "docker.io");
+        assert_eq!(parsed.name, "nginx");
+        assert_eq!(parsed.upstream_path, "/v2/nginx/manifests/latest");
+    }
+
+    #[test]
+    fn test_parse_path_with_port_registry() {
+        let parsed = parse_path("/v2/localhost:5000/myimage/manifests/latest", "GET").unwrap();
+        assert_eq!(parsed.registry, "localhost:5000");
+        assert_eq!(parsed.name, "myimage");
+        assert_eq!(parsed.upstream_path, "/v2/myimage/manifests/latest");
+    }
+
+    #[test]
+    fn test_is_registry_host_fn() {
+        assert!(is_registry_host("docker.io"));
+        assert!(is_registry_host("ghcr.io"));
+        assert!(is_registry_host("localhost:5000"));
+        assert!(is_registry_host("my.registry.com"));
+        assert!(!is_registry_host("library"));
+        assert!(!is_registry_host("nginx"));
+        assert!(!is_registry_host("myorg"));
     }
 
     #[test]
