@@ -165,31 +165,30 @@ impl AppConfig {
                 );
             }
 
-            if let Some(auth) = &mut reg.auth {
-                if let AuthConfig::Basic {
+            if let Some(auth) = &mut reg.auth
+                && let AuthConfig::Basic {
                     password,
                     password_file,
                     ..
                 } = auth
-                    && password.is_none()
-                    && let Some(path) = password_file
-                {
-                    match std::fs::read_to_string(path.as_path()) {
-                        Ok(content) => {
-                            *password = Some(content.trim().to_string());
-                            tracing::debug!(
-                                registry = %reg.name,
-                                "loaded password from file {}",
-                                path.display()
-                            );
-                        }
-                        Err(e) => {
-                            return Err(AppError::Config(format!(
-                                "failed to read password file {}: {}",
-                                path.display(),
-                                e
-                            )));
-                        }
+                && password.is_none()
+                && let Some(path) = password_file
+            {
+                match std::fs::read_to_string(path.as_path()) {
+                    Ok(content) => {
+                        *password = Some(content.trim().to_string());
+                        tracing::debug!(
+                            registry = %reg.name,
+                            "loaded password from file {}",
+                            path.display()
+                        );
+                    }
+                    Err(e) => {
+                        return Err(AppError::Config(format!(
+                            "failed to read password file {}: {}",
+                            path.display(),
+                            e
+                        )));
                     }
                 }
             }

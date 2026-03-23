@@ -74,7 +74,9 @@ impl AuthManager {
         };
 
         match auth_config {
-            AuthConfig::Basic { username, password, .. } => {
+            AuthConfig::Basic {
+                username, password, ..
+            } => {
                 tracing::debug!(registry = %registry_name, username = %username, "using basic auth");
                 let pass = if let Some(p) = password {
                     p.clone()
