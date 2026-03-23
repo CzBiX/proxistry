@@ -4,8 +4,10 @@ use anyhow::{Context, Result, bail};
 use base64::Engine;
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
-use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
-use reqwest::header::{HeaderMap, HeaderValue, WWW_AUTHENTICATE};
+use reqwest::{
+    Url,
+    header::{HeaderMap, HeaderValue, WWW_AUTHENTICATE},
+};
 use serde::Deserialize;
 
 use crate::config::AuthConfig;
@@ -21,10 +23,6 @@ struct CachedToken {
 pub struct AuthManager {
     token_cache: DashMap<String, CachedToken>,
     http_client: reqwest::Client,
-}
-
-fn urlencode(input: &str) -> String {
-    utf8_percent_encode(input, NON_ALPHANUMERIC).to_string()
 }
 
 impl AuthManager {
@@ -134,20 +132,16 @@ impl AuthManager {
             bail!("empty realm in WWW-Authenticate");
         }
 
-        // Check token cache
-        if let Some(val) = self.cached_token_header(registry_name)? {
-            return Ok(Some(val));
-        }
-
         // Perform token exchange
-        let mut url = format!("{}?service={}", realm, urlencode(&service));
+        let mut url = Url::parse_with_params(&realm, &[("service", &service)])
+            .context("invalid realm URL")?;
         if !scope.is_empty() {
-            url.push_str(&format!("&scope={}", urlencode(&scope)));
+            url.query_pairs_mut().append_pair("scope", &scope);
         }
 
         tracing::debug!(registry = %registry_name, realm = %realm, "performing token exchange");
 
-        let mut req = self.http_client.get(&url);
+        let mut req = self.http_client.get(url);
 
         // Add credentials if available
         if let Some(AuthConfig::Basic {
@@ -245,31 +239,6 @@ fn parse_www_authenticate(header: &str) -> HashMap<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_urlencode_simple() {
-        assert_eq!(urlencode("hello"), "hello");
-    }
-
-    #[test]
-    fn test_urlencode_with_spaces() {
-        let encoded = urlencode("hello world");
-        assert_eq!(encoded, "hello%20world");
-    }
-
-    #[test]
-    fn test_urlencode_with_special_chars() {
-        let encoded = urlencode("repository:library/nginx:pull,push");
-        // Colons, slashes, commas should be encoded
-        assert!(encoded.contains("%3A") || encoded.contains("%3a"));
-        assert!(encoded.contains("%2F") || encoded.contains("%2f"));
-        assert!(encoded.contains("%2C") || encoded.contains("%2c"));
-    }
-
-    #[test]
-    fn test_urlencode_empty() {
-        assert_eq!(urlencode(""), "");
-    }
 
     #[test]
     fn test_parse_www_authenticate_basic() {

@@ -35,7 +35,6 @@ humantime-serde = "1"
 humantime = "2"
 async-recursion = "1"
 dirs-sys = "0.5.0"
-percent-encoding = "2.3.2"
 regex = { version = "1", default-features = false, features = ["std"] }
 
 [dev-dependencies]

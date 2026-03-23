@@ -1222,7 +1222,6 @@ dependencies = [
  "humantime",
  "humantime-serde",
  "parking_lot",
- "percent-encoding",
  "regex",
  "reqwest",
  "serde",
