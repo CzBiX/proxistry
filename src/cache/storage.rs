@@ -301,6 +301,7 @@ impl StorageBackend for FsStorage {
         let meta_path = self.meta_path(key)?;
         let existed = data_path.exists();
 
+        // Best-effort delete: ignore errors since we want to proceed even if one of them fails
         if data_path.exists() {
             fs::remove_file(&data_path).await.ok();
         }
