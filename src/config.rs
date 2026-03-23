@@ -465,7 +465,7 @@ mod tests {
     #[test]
     fn test_server_config_defaults() {
         let sc = ServerConfig::default();
-        assert_eq!(sc.listen, "0.0.0.0:8000");
+        assert_eq!(sc.listen, "0.0.0.0:5000");
         assert!(sc.base_url.is_none());
         assert_eq!(sc.concurrent, 10);
     }
@@ -489,7 +489,7 @@ mod tests {
     #[test]
     fn test_load_nonexistent_file_returns_defaults() {
         let config = AppConfig::load(Path::new("/nonexistent/path/config.toml")).unwrap();
-        assert_eq!(config.server.listen, "0.0.0.0:8000");
+        assert_eq!(config.server.listen, "0.0.0.0:5000");
         assert!(config.registries.is_empty());
     }
 }
