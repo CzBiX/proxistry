@@ -142,7 +142,7 @@ impl FsStorage {
     }
 
     /// Recursively collect all cached entries with their metadata for eviction.
-    async fn collect_entries(&self) -> AppResult<Vec<(String, CacheMetadata, u64)>> {
+    async fn collect_entries(&self) -> AppResult<Vec<(String, CacheMetadata)>> {
         let mut entries = Vec::new();
         self.scan_dir(&self.base_dir, &self.base_dir, &mut entries)
             .await?;
@@ -154,7 +154,7 @@ impl FsStorage {
         &self,
         dir: &Path,
         base: &Path,
-        entries: &mut Vec<(String, CacheMetadata, u64)>,
+        entries: &mut Vec<(String, CacheMetadata)>,
     ) -> AppResult<()> {
         let mut read_dir = match fs::read_dir(dir).await {
             Ok(rd) => rd,
@@ -175,9 +175,8 @@ impl FsStorage {
                     .unwrap_or(&path)
                     .to_string_lossy()
                     .to_string();
-                let file_size = entry.metadata().await.map(|m| m.len()).unwrap_or(0);
                 if let Ok(Some(meta)) = self.read_meta(&rel).await {
-                    entries.push((rel, meta, file_size));
+                    entries.push((rel, meta));
                 }
             }
         }
@@ -330,12 +329,12 @@ impl StorageBackend for FsStorage {
 
     async fn total_size(&self) -> AppResult<u64> {
         let entries = self.collect_entries().await?;
-        Ok(entries.iter().map(|(_, _, size)| size).sum())
+        Ok(entries.iter().map(|(_, meta)| meta.size).sum())
     }
 
     async fn evict_lru(&self, target_size: u64) -> AppResult<u64> {
         let mut entries = self.collect_entries().await?;
-        let current_size: u64 = entries.iter().map(|(_, _, size)| size).sum();
+        let current_size: u64 = entries.iter().map(|(_, meta)| meta.size).sum();
 
         if current_size <= target_size {
             return Ok(0);
@@ -347,11 +346,12 @@ impl StorageBackend for FsStorage {
         let mut freed = 0u64;
         let mut remaining = current_size;
 
-        for (key, _, size) in &entries {
+        for (key, meta) in &entries {
             if remaining <= target_size {
                 break;
             }
             if self.delete(key).await? {
+                let size = meta.size;
                 freed += size;
                 remaining -= size;
                 tracing::debug!(key = %key, size = %size, "evicted cache entry");
@@ -508,7 +508,7 @@ mod tests {
         let storage = make_test_storage(&tmp).await;
         // Empty cache — collect_entries returns empty vec
         let entries = storage.collect_entries().await.unwrap();
-        let total: u64 = entries.iter().map(|(_, _, size)| size).sum();
+        let total: u64 = entries.iter().map(|(_, meta)| meta.size).sum();
         assert_eq!(total, 0);
     }
 
