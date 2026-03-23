@@ -45,7 +45,7 @@ pub struct CacheConfig {
 impl Default for CacheConfig {
     fn default() -> Self {
         let data_dir = if cfg!(target_os = "linux") {
-            PathBuf::from("/var/lib/proxistry/cache")
+            PathBuf::from("./cache")
         } else {
             let tmp_dir = std::env::temp_dir();
             tmp_dir.join("proxistry_cache")
