@@ -28,11 +28,13 @@
 #[[registries]]
 #name = "docker.io"
 #[registries.auth]
-#type = "bearer"
-#token = "token"
+#type = "basic"
+#username = "user"
+#password = "pass"
 
 #[[registries]]
 #name = "ghcr.io"
 #[registries.auth]
-#type = "bearer"
-#token = "ghp_xxx"
+#type = "basic"
+#username = "user"
+#password_file = "/secret/ghcr_pass.txt"

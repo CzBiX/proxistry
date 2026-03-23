@@ -113,12 +113,13 @@ pub enum AuthConfig {
         username: String,
         #[serde(default)]
         password: Option<String>,
+        #[serde(default)]
+        password_file: Option<PathBuf>,
     },
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Default)]
 #[serde(default)]
-#[derive(Default)]
 pub struct TlsConfig {
     pub disable: bool,
     pub insecure: bool,
@@ -162,6 +163,35 @@ impl AppConfig {
                     "registry URL not set, defaulting to {}",
                     reg.url
                 );
+            }
+
+            if let Some(auth) = &mut reg.auth {
+                if let AuthConfig::Basic {
+                    password,
+                    password_file,
+                    ..
+                } = auth
+                    && password.is_none()
+                    && let Some(path) = password_file
+                {
+                    match std::fs::read_to_string(path.as_path()) {
+                        Ok(content) => {
+                            *password = Some(content.trim().to_string());
+                            tracing::debug!(
+                                registry = %reg.name,
+                                "loaded password from file {}",
+                                path.display()
+                            );
+                        }
+                        Err(e) => {
+                            return Err(AppError::Config(format!(
+                                "failed to read password file {}: {}",
+                                path.display(),
+                                e
+                            )));
+                        }
+                    }
+                }
             }
         }
 
