@@ -14,7 +14,7 @@ RUN cargo build --locked --release
 # Runtime stage
 FROM gcr.io/distroless/cc-debian13:nonroot
 
-COPY --from=builder /app/target/release/proxistry /
+COPY --from=builder /app/target/release/proxistry .
 EXPOSE 5000
 
 ENTRYPOINT ["./proxistry"]
