@@ -151,6 +151,9 @@ impl AuthManager {
         {
             tracing::debug!(registry = %registry_name, username = %user, "attaching basic credentials to token request");
             req = req.basic_auth(user, Some(pass));
+        } else {
+            tracing::debug!(registry = %registry_name, "no credentials available for token request");
+            return Ok(None);
         }
 
         let resp = req.send().await.context("token exchange failed")?;
