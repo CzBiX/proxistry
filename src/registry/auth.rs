@@ -153,10 +153,18 @@ impl AuthManager {
             req = req.basic_auth(user, Some(pass));
         } else {
             tracing::debug!(registry = %registry_name, "no credentials available for token request");
-            return Ok(None);
         }
 
-        let resp = req.send().await.context("token exchange failed")?;
+        let resp = match req.send().await {
+            Ok(r) => r,
+            Err(e) => {
+                if e.is_status() && auth_config.is_none() {
+                    return Ok(None);
+                }
+
+                return Err(anyhow::Error::from(e).context("token exchange request failed"));
+            }
+        };
 
         if !resp.status().is_success() {
             tracing::warn!(registry = %registry_name, status = %resp.status(), "token exchange failed");
