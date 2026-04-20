@@ -144,6 +144,14 @@ pub fn parse_path(path: &str, method: &str) -> Result<ParsedPath> {
     // We need to find the endpoint marker: manifests/, blobs/, tags/
     let (name, path_type, endpoint_path) = parse_endpoint(&remainder, method)?;
 
+    // When registry is docker.io and name has no slash, prepend "library/"
+    // to match Docker official client behavior (e.g., "nginx" -> "library/nginx")
+    let name = if registry == "docker.io" && !name.contains('/') {
+        format!("library/{}", name)
+    } else {
+        name
+    };
+
     let upstream_path = format!("/v2/{}/{}", name, endpoint_path);
 
     Ok(ParsedPath {
@@ -450,16 +458,58 @@ mod tests {
 
     #[test]
     fn test_parse_path_missing_registry_single_name() {
+        // Docker official client behavior: bare name gets "library/" prefix
         let parsed = parse_path("/v2/nginx/manifests/latest", "GET").unwrap();
         assert_eq!(parsed.registry, "docker.io");
-        assert_eq!(parsed.name, "nginx");
-        assert_eq!(parsed.upstream_path, "/v2/nginx/manifests/latest");
+        assert_eq!(parsed.name, "library/nginx");
+        assert_eq!(parsed.upstream_path, "/v2/library/nginx/manifests/latest");
     }
 
     #[test]
     fn test_parse_path_with_port_registry() {
         let parsed = parse_path("/v2/localhost:5000/myimage/manifests/latest", "GET").unwrap();
         assert_eq!(parsed.registry, "localhost:5000");
+        assert_eq!(parsed.name, "myimage");
+        assert_eq!(parsed.upstream_path, "/v2/myimage/manifests/latest");
+    }
+
+    #[test]
+    fn test_parse_path_docker_io_explicit_bare_name() {
+        // Explicit docker.io with bare name should also get "library/" prefix
+        let parsed = parse_path("/v2/docker.io/nginx/manifests/latest", "GET").unwrap();
+        assert_eq!(parsed.registry, "docker.io");
+        assert_eq!(parsed.name, "library/nginx");
+        assert_eq!(parsed.upstream_path, "/v2/library/nginx/manifests/latest");
+    }
+
+    #[test]
+    fn test_parse_path_docker_io_bare_name_blob() {
+        let parsed = parse_path("/v2/docker.io/alpine/blobs/sha256:abc123", "GET").unwrap();
+        assert_eq!(parsed.registry, "docker.io");
+        assert_eq!(parsed.name, "library/alpine");
+        assert_eq!(
+            parsed.upstream_path,
+            "/v2/library/alpine/blobs/sha256:abc123"
+        );
+    }
+
+    #[test]
+    fn test_parse_path_docker_io_qualified_name_no_prefix() {
+        // Already qualified name (has slash) should NOT get extra "library/" prefix
+        let parsed = parse_path("/v2/docker.io/myuser/myapp/manifests/latest", "GET").unwrap();
+        assert_eq!(parsed.registry, "docker.io");
+        assert_eq!(parsed.name, "myuser/myapp");
+        assert_eq!(
+            parsed.upstream_path,
+            "/v2/myuser/myapp/manifests/latest"
+        );
+    }
+
+    #[test]
+    fn test_parse_path_non_docker_bare_name_no_prefix() {
+        // Non-docker.io registries should NOT get "library/" prefix
+        let parsed = parse_path("/v2/ghcr.io/myimage/manifests/latest", "GET").unwrap();
+        assert_eq!(parsed.registry, "ghcr.io");
         assert_eq!(parsed.name, "myimage");
         assert_eq!(parsed.upstream_path, "/v2/myimage/manifests/latest");
     }
