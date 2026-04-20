@@ -499,10 +499,7 @@ mod tests {
         let parsed = parse_path("/v2/docker.io/myuser/myapp/manifests/latest", "GET").unwrap();
         assert_eq!(parsed.registry, "docker.io");
         assert_eq!(parsed.name, "myuser/myapp");
-        assert_eq!(
-            parsed.upstream_path,
-            "/v2/myuser/myapp/manifests/latest"
-        );
+        assert_eq!(parsed.upstream_path, "/v2/myuser/myapp/manifests/latest");
     }
 
     #[test]

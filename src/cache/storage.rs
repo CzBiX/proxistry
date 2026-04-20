@@ -326,7 +326,7 @@ impl StorageBackend for FsStorage {
         }
 
         // Sort by last_accessed ascending (oldest first)
-        entries.sort_by(|a, b| a.1.last_accessed.cmp(&b.1.last_accessed));
+        entries.sort_by_key(|e| e.1.last_accessed);
 
         let mut freed = 0u64;
         let mut remaining = current_size;
