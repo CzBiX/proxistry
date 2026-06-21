@@ -67,3 +67,7 @@ For other registries, add additional `[[registry]]` blocks or pull via the Proxi
 ```bash
 podman pull localhost:8000/ghcr.io/owner/image:tag
 ```
+
+## Documentation
+
+- [缓存系统文档](CACHE.md) - 详细的缓存架构、配置和工作原理
