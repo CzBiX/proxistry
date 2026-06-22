@@ -1,4 +1,5 @@
 use bytes::Bytes;
+use chrono::Utc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -232,10 +233,41 @@ impl CacheManager {
         Ok(())
     }
 
-    /// Run LRU eviction to bring cache under max size.
+    /// Run TTL cleanup first, then LRU eviction to bring cache under max size.
     pub async fn run_eviction(&self) -> anyhow::Result<u64> {
+        let ttl_freed = self.run_ttl_cleanup().await?;
         let max_bytes = self.config.cache.max_size_gb * 1024 * 1024 * 1024;
-        self.storage.evict_lru(max_bytes).await
+        let lru_freed = self.storage.evict_lru(max_bytes).await?;
+        Ok(ttl_freed + lru_freed)
+    }
+
+    /// Remove entries that have exceeded their TTL.
+    async fn run_ttl_cleanup(&self) -> anyhow::Result<u64> {
+        let entries = self.storage.list_entries().await?;
+        let now = Utc::now();
+        let mut freed = 0u64;
+
+        for (key, meta) in &entries {
+            let ttl = match ttl_for_key(key, &self.config) {
+                Some(t) => t,
+                None => continue,
+            };
+            let age = now
+                .signed_duration_since(meta.created_at)
+                .to_std()
+                .unwrap_or(Duration::MAX);
+            if age >= ttl
+                && self.storage.delete(key).await?
+            {
+                freed += meta.size;
+                tracing::debug!(key = %key, size = %meta.size, "TTL expired, removed entry");
+            }
+        }
+
+        if freed > 0 {
+            tracing::info!(freed_bytes = %freed, "TTL cleanup complete");
+        }
+        Ok(freed)
     }
 
     /// Get total cached size.
@@ -258,7 +290,20 @@ fn is_fresh(meta: &CacheMetadata, ttl: Duration) -> bool {
     age < ttl
 }
 
-use chrono::Utc;
+/// Determine the TTL for a cache key based on its type and registry.
+fn ttl_for_key(key: &str, config: &AppConfig) -> Option<Duration> {
+    if key.starts_with("blobs/") {
+        Some(config.cache.blob_ttl)
+    } else if let Some(rest) = key.strip_prefix("manifests/") {
+        let registry = rest.split('/').next()?;
+        Some(config.manifest_ttl_for(registry))
+    } else if let Some(rest) = key.strip_prefix("index/") {
+        let registry = rest.split('/').next()?;
+        Some(config.manifest_ttl_for(registry))
+    } else {
+        None
+    }
+}
 
 #[cfg(test)]
 mod tests {
