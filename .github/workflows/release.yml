@@ -78,7 +78,7 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           flavor: |
             prefix=${{ github.event_name == 'workflow_dispatch' && 'dev-' || '' }}
-            suffix=-${{ matrix.arch }},onlatest=true
+            suffix=-${{ matrix.arch }},onlatest=${{ github.event_name != 'workflow_dispatch' }}
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -102,7 +102,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-    if: github.event_name != 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v6
 
@@ -121,10 +120,14 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          flavor: |
+            prefix=${{ github.event_name == 'workflow_dispatch' && 'dev-' || '' }}
+            onlatest=${{ github.event_name != 'workflow_dispatch' }}
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
+            type=ref,event=branch
 
       - name: Merge
         run: |
