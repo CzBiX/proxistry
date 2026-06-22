@@ -62,45 +62,59 @@ impl CacheManager {
         name: &str,
         reference: &str,
     ) -> anyhow::Result<Option<(Bytes, CacheMetadata)>> {
-        // If reference is a tag, look up digest from index first
         let cache_key = if key::is_digest(reference) {
             key::manifest_key(registry, name, reference)
         } else {
-            // Check tag→digest index
             let index_key = key::tag_index_key(registry, name, reference);
-            if let Some((digest_data, index_meta)) = self.storage.get(&index_key).await? {
-                let digest = String::from_utf8_lossy(&digest_data).to_string();
-                let ttl = self.manifest_ttl(registry);
-                // Check if tag index is fresh using metadata from the same read
-                if !is_fresh(&index_meta, ttl) {
-                    tracing::debug!(
-                        registry = %registry,
-                        name = %name,
-                        tag = %reference,
-                        "tag index entry expired"
-                    );
+            let index_meta = match self.storage.get_meta(&index_key).await? {
+                Some(m) => m,
+                None => {
                     self.stats.record_miss();
                     return Ok(None);
                 }
-                key::manifest_key(registry, name, &digest)
-            } else {
+            };
+            let ttl = self.manifest_ttl(registry);
+            if !is_fresh(&index_meta, ttl) {
+                tracing::debug!(
+                    registry = %registry,
+                    name = %name,
+                    tag = %reference,
+                    "tag index entry expired"
+                );
+                self.stats.record_miss();
+                return Ok(None);
+            }
+            let digest_data = match self.storage.get_data(&index_key).await? {
+                Some(d) => d,
+                None => {
+                    self.stats.record_miss();
+                    return Ok(None);
+                }
+            };
+            let digest = String::from_utf8_lossy(&digest_data).to_string();
+            key::manifest_key(registry, name, &digest)
+        };
+
+        let ttl = self.manifest_ttl(registry);
+        let meta = match self.storage.get_meta(&cache_key).await? {
+            Some(m) => m,
+            None => {
                 self.stats.record_miss();
                 return Ok(None);
             }
         };
 
-        let ttl = self.manifest_ttl(registry);
-        match self.storage.get(&cache_key).await? {
-            Some((data, meta)) if is_fresh(&meta, ttl) => {
+        if !is_fresh(&meta, ttl) {
+            tracing::debug!(key = %cache_key, "manifest cache expired");
+            self.stats.record_miss();
+            return Ok(None);
+        }
+
+        match self.storage.get_data(&cache_key).await? {
+            Some(data) => {
                 tracing::debug!(key = %cache_key, "manifest cache hit");
                 self.stats.record_hit();
                 Ok(Some((data, meta)))
-            }
-            Some(_) => {
-                tracing::debug!(key = %cache_key, "manifest cache expired");
-                self.stats.record_miss();
-                // Don't delete yet — let LRU handle stale entries
-                Ok(None)
             }
             None => {
                 self.stats.record_miss();
@@ -151,16 +165,25 @@ impl CacheManager {
         let cache_key = key::blob_key(digest);
         let ttl = self.config.cache.blob_ttl;
 
+        let meta = match self.storage.get_meta(&cache_key).await? {
+            Some(m) => m,
+            None => {
+                self.stats.record_miss();
+                return Ok(None);
+            }
+        };
+
+        if !is_fresh(&meta, ttl) {
+            tracing::debug!(key = %cache_key, "blob cache expired");
+            self.stats.record_miss();
+            return Ok(None);
+        }
+
         match self.storage.get_stream(&cache_key, range).await? {
-            Some((stream, meta)) if is_fresh(&meta, ttl) => {
+            Some(stream) => {
                 tracing::debug!(key = %cache_key, "blob cache hit (stream)");
                 self.stats.record_hit();
                 Ok(Some((stream, meta)))
-            }
-            Some(_) => {
-                tracing::debug!(key = %cache_key, "blob cache expired");
-                self.stats.record_miss();
-                Ok(None)
             }
             None => {
                 self.stats.record_miss();
@@ -217,7 +240,8 @@ impl CacheManager {
 
     /// Get total cached size.
     pub async fn total_size(&self) -> anyhow::Result<u64> {
-        self.storage.total_size().await
+        let entries = self.storage.list_entries().await?;
+        Ok(entries.iter().map(|(_, meta)| meta.size).sum())
     }
 
     fn manifest_ttl(&self, registry: &str) -> Duration {

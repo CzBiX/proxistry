@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use crate::cache::inflight::InflightTracker;
 use crate::cache::manager::CacheManager;
-use crate::cache::storage::FsStorage;
+use crate::cache::storage::{FsStorage, MetaCachedStorage};
 use crate::config::AppConfig;
 use crate::middleware::logging::logging_middleware;
 use crate::proxy::client::UpstreamClient;
@@ -27,7 +27,8 @@ pub async fn build_router(config: AppConfig) -> anyhow::Result<(Router, Arc<AppS
     let config = Arc::new(config);
 
     // Initialize storage backend
-    let storage = Arc::new(FsStorage::new(config.cache.data_dir.clone()).await?)
+    let fs_storage = Arc::new(FsStorage::new(config.cache.data_dir.clone()).await?);
+    let storage = Arc::new(MetaCachedStorage::new(fs_storage).await?)
         as Arc<dyn crate::cache::storage::StorageBackend>;
 
     // Initialize cache manager
