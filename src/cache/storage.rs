@@ -69,7 +69,14 @@ impl FsStorage {
     pub async fn new(base_dir: PathBuf) -> Result<Self> {
         fs::create_dir_all(&base_dir)
             .await
-            .context("failed to create cache dir")?;
+            .with_context(|| format!("create cache dir {}", base_dir.display()))?;
+
+        let probe = base_dir.join(".write_probe");
+        fs::write(&probe, b"")
+            .await
+            .with_context(|| format!("cache dir {} is not writable", base_dir.display()))?;
+        fs::remove_file(&probe).await.ok();
+
         Ok(Self { base_dir })
     }
 
@@ -107,12 +114,20 @@ impl FsStorage {
     async fn write_meta(&self, key: &str, meta: &CacheMetadata) -> Result<()> {
         let meta_path = self.meta_path(key)?;
         if let Some(parent) = meta_path.parent() {
-            fs::create_dir_all(parent).await?;
+            fs::create_dir_all(parent)
+                .await
+                .with_context(|| format!("create meta dir {}", parent.display()))?;
         }
         let data = serde_json::to_vec(meta).context("serialize meta")?;
-        let mut file = fs::File::create(&meta_path).await?;
-        file.write_all(&data).await?;
-        file.flush().await?;
+        let mut file = fs::File::create(&meta_path)
+            .await
+            .with_context(|| format!("create meta {}", meta_path.display()))?;
+        file.write_all(&data)
+            .await
+            .with_context(|| format!("write meta {}", meta_path.display()))?;
+        file.flush()
+            .await
+            .with_context(|| format!("flush meta {}", meta_path.display()))?;
         Ok(())
     }
 
@@ -211,12 +226,20 @@ impl StorageBackend for FsStorage {
     async fn put(&self, key: &str, data: Bytes, meta: CacheMetadata) -> Result<()> {
         let data_path = self.data_path(key)?;
         if let Some(parent) = data_path.parent() {
-            fs::create_dir_all(parent).await?;
+            fs::create_dir_all(parent)
+                .await
+                .with_context(|| format!("create dir {}", parent.display()))?;
         }
 
-        let mut file = fs::File::create(&data_path).await?;
-        file.write_all(&data).await?;
-        file.flush().await?;
+        let mut file = fs::File::create(&data_path)
+            .await
+            .with_context(|| format!("create {}", data_path.display()))?;
+        file.write_all(&data)
+            .await
+            .with_context(|| format!("write {}", data_path.display()))?;
+        file.flush()
+            .await
+            .with_context(|| format!("flush {}", data_path.display()))?;
 
         self.write_meta(key, &meta).await?;
         Ok(())
@@ -227,19 +250,27 @@ impl StorageBackend for FsStorage {
 
         let data_path = self.data_path(key)?;
         if let Some(parent) = data_path.parent() {
-            fs::create_dir_all(parent).await?;
+            fs::create_dir_all(parent)
+                .await
+                .with_context(|| format!("create dir {}", parent.display()))?;
         }
 
-        let mut file = fs::File::create(&data_path).await?;
+        let mut file = fs::File::create(&data_path)
+            .await
+            .with_context(|| format!("create {}", data_path.display()))?;
         let mut total_bytes: u64 = 0;
 
         let mut stream = std::pin::pin!(stream);
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.context("stream read error")?;
             total_bytes += chunk.len() as u64;
-            file.write_all(&chunk).await?;
+            file.write_all(&chunk)
+                .await
+                .with_context(|| format!("write {}", data_path.display()))?;
         }
-        file.flush().await?;
+        file.flush()
+            .await
+            .with_context(|| format!("flush {}", data_path.display()))?;
 
         let final_meta = CacheMetadata {
             size: total_bytes,

@@ -12,6 +12,10 @@ COPY src ./src
 RUN cargo build --locked --release
 
 # Runtime stage
+# Runs as UID 65534 (nonroot). Mount a writable volume for the cache directory
+# and ensure it is owned by this user, e.g.:
+#   docker run -v /host/cache:/app/cache ...
+#   chown 65534:65534 /host/cache
 FROM gcr.io/distroless/cc-debian13:nonroot
 
 COPY --from=builder /app/target/release/proxistry .

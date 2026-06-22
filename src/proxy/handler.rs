@@ -262,7 +262,13 @@ async fn handle_manifest_get(
         )
         .await
     {
-        tracing::warn!(error = %e, "failed to cache manifest");
+        tracing::warn!(
+            error = %e,
+            registry = %parsed.registry,
+            name = %parsed.name,
+            reference = %reference,
+            "failed to cache manifest"
+        );
     }
 
     // Build response
@@ -444,7 +450,7 @@ async fn fetch_blob_upstream_with_guard(
         // that the blob is now available in cache.
         drop(guard);
         if let Err(e) = result {
-            tracing::warn!(error = %e, "failed to cache blob stream");
+            tracing::warn!(error = %e, digest = %digest_owned, "failed to cache blob stream");
         }
     });
 
