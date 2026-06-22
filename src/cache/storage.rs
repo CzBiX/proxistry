@@ -76,7 +76,7 @@ impl FsStorage {
             tracing::warn!(
                 error = %e,
                 dir = %base_dir.display(),
-                "cache dir is not writable, caching will be disabled"
+                "cache dir is not writable, cache will not work"
             );
         } else {
             fs::remove_file(&probe).await.ok();
