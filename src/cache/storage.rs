@@ -319,10 +319,20 @@ pub struct MetaCachedStorage {
 impl MetaCachedStorage {
     pub async fn new(inner: Arc<dyn StorageBackend>) -> Result<Self> {
         let entries = inner.list_entries().await?;
-        let meta_cache = DashMap::with_capacity(entries.len());
+        let entry_count = entries.len();
+        let total_size: u64 = entries.iter().map(|(_, meta)| meta.size).sum();
+
+        let meta_cache = DashMap::with_capacity(entry_count);
         for (key, meta) in entries {
             meta_cache.insert(key, CachedMeta { meta, dirty: false });
         }
+
+        tracing::info!(
+            entries = entry_count,
+            total_bytes = total_size,
+            "cache storage initialized"
+        );
+
         Ok(Self { inner, meta_cache })
     }
 
