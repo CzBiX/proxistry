@@ -72,10 +72,15 @@ impl FsStorage {
             .with_context(|| format!("create cache dir {}", base_dir.display()))?;
 
         let probe = base_dir.join(".write_probe");
-        fs::write(&probe, b"")
-            .await
-            .with_context(|| format!("cache dir {} is not writable", base_dir.display()))?;
-        fs::remove_file(&probe).await.ok();
+        if let Err(e) = fs::write(&probe, b"").await {
+            tracing::warn!(
+                error = %e,
+                dir = %base_dir.display(),
+                "cache dir is not writable, caching will be disabled"
+            );
+        } else {
+            fs::remove_file(&probe).await.ok();
+        }
 
         Ok(Self { base_dir })
     }
