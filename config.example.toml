@@ -11,10 +11,13 @@
 # data_dir = "./cache"
 # Maximum cache size in GB; LRU eviction runs when exceeded
 # max_size_gb = 4
-# Default manifest cache TTL (per-registry overrides below take precedence)
+# Tag-to-digest index TTL (how long a tag mapping is considered fresh)
 # Supports human-readable durations: "10m", "1h", "30s", etc.
-# manifest_ttl = "30m"
-# Blob cache TTL (blobs are content-addressed and immutable, so this can be long)
+# Set to "0s" to disable expiration (never expire)
+# tag_ttl = "30m"
+# Digest manifest TTL (manifests fetched by digest are immutable)
+# manifest_ttl = "7d"
+# Blob TTL (blobs are content-addressed and immutable)
 # blob_ttl = "7d"
 
 [whitelist]

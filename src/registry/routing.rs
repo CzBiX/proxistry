@@ -541,6 +541,7 @@ mod tests {
                 name: "docker.io".to_string(),
                 url: "https://registry-1.docker.io".to_string(),
                 user_agent: Some("custom-ua".to_string()),
+                tag_ttl: None,
                 manifest_ttl: None,
                 auth: None,
                 tls: TlsConfig::default(),

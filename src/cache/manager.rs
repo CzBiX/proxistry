@@ -74,7 +74,7 @@ impl CacheManager {
                     return Ok(None);
                 }
             };
-            let ttl = self.manifest_ttl(registry);
+            let ttl = self.tag_ttl(registry);
             if !is_fresh(&index_meta, ttl) {
                 tracing::debug!(
                     registry = %registry,
@@ -256,9 +256,7 @@ impl CacheManager {
                 .signed_duration_since(meta.created_at)
                 .to_std()
                 .unwrap_or(Duration::MAX);
-            if age >= ttl
-                && self.storage.delete(key).await?
-            {
+            if age >= ttl && self.storage.delete(key).await? {
                 freed += meta.size;
                 tracing::debug!(key = %key, size = %meta.size, "TTL expired, removed entry");
             }
@@ -276,13 +274,21 @@ impl CacheManager {
         Ok(entries.iter().map(|(_, meta)| meta.size).sum())
     }
 
+    fn tag_ttl(&self, registry: &str) -> Duration {
+        self.config.tag_ttl_for(registry)
+    }
+
     fn manifest_ttl(&self, registry: &str) -> Duration {
         self.config.manifest_ttl_for(registry)
     }
 }
 
 /// Check if a cached entry is still fresh given a TTL.
+/// A TTL of zero means the entry never expires.
 fn is_fresh(meta: &CacheMetadata, ttl: Duration) -> bool {
+    if ttl.is_zero() {
+        return true;
+    }
     let age = Utc::now()
         .signed_duration_since(meta.created_at)
         .to_std()
@@ -299,7 +305,7 @@ fn ttl_for_key(key: &str, config: &AppConfig) -> Option<Duration> {
         Some(config.manifest_ttl_for(registry))
     } else if let Some(rest) = key.strip_prefix("index/") {
         let registry = rest.split('/').next()?;
-        Some(config.manifest_ttl_for(registry))
+        Some(config.tag_ttl_for(registry))
     } else {
         None
     }
@@ -390,16 +396,16 @@ mod tests {
     }
 
     #[test]
-    fn test_is_fresh_zero_ttl() {
+    fn test_is_fresh_zero_ttl_means_never_expire() {
         let meta = CacheMetadata {
             size: 100,
             content_type: None,
-            created_at: Utc::now(),
+            created_at: Utc::now() - ChronoDuration::seconds(999999),
             last_accessed: Utc::now(),
             digest: None,
         };
         let ttl = Duration::from_secs(0);
-        assert!(!is_fresh(&meta, ttl));
+        assert!(is_fresh(&meta, ttl));
     }
 
     #[test]

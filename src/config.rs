@@ -3,6 +3,32 @@ use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+mod ttl {
+    use serde::{self, Deserialize, Deserializer};
+    use std::time::Duration;
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Duration, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        humantime::parse_duration(&s).map_err(serde::de::Error::custom)
+    }
+
+    pub fn deserialize_option<'de, D>(deserializer: D) -> Result<Option<Duration>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s: Option<String> = Option::deserialize(deserializer)?;
+        match s {
+            None => Ok(None),
+            Some(s) => humantime::parse_duration(&s)
+                .map(Some)
+                .map_err(serde::de::Error::custom),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(default)]
 pub struct AppConfig {
@@ -36,9 +62,11 @@ impl Default for ServerConfig {
 pub struct CacheConfig {
     pub data_dir: PathBuf,
     pub max_size_gb: u64,
-    #[serde(with = "humantime_serde")]
+    #[serde(with = "ttl")]
+    pub tag_ttl: Duration,
+    #[serde(with = "ttl")]
     pub manifest_ttl: Duration,
-    #[serde(with = "humantime_serde")]
+    #[serde(with = "ttl")]
     pub blob_ttl: Duration,
 }
 
@@ -54,7 +82,8 @@ impl Default for CacheConfig {
         Self {
             data_dir,
             max_size_gb: 4,
-            manifest_ttl: Duration::from_secs(30 * 60), // 30 minutes
+            tag_ttl: Duration::from_secs(30 * 60), // 30 minutes
+            manifest_ttl: Duration::from_secs(7 * 24 * 3600), // 7 days
             blob_ttl: Duration::from_secs(7 * 24 * 3600), // 7 days
         }
     }
@@ -74,7 +103,9 @@ pub struct RegistryConfig {
     pub url: String,
     #[serde(default)]
     pub user_agent: Option<String>,
-    #[serde(default, with = "humantime_serde")]
+    #[serde(default, deserialize_with = "ttl::deserialize_option")]
+    pub tag_ttl: Option<Duration>,
+    #[serde(default, deserialize_with = "ttl::deserialize_option")]
     pub manifest_ttl: Option<Duration>,
     #[serde(default)]
     pub auth: Option<AuthConfig>,
@@ -95,6 +126,7 @@ impl RegistryConfig {
             name: name.to_string(),
             url,
             user_agent: None,
+            tag_ttl: None,
             manifest_ttl: None,
             auth: None,
             tls: TlsConfig::default(),
@@ -201,6 +233,16 @@ impl AppConfig {
         Ok(())
     }
 
+    /// Get the effective tag TTL for a registry.
+    /// Uses registry-specific TTL if set, otherwise falls back to global.
+    pub fn tag_ttl_for(&self, registry_name: &str) -> Duration {
+        self.registries
+            .iter()
+            .find(|r| r.name == registry_name)
+            .and_then(|r| r.tag_ttl)
+            .unwrap_or(self.cache.tag_ttl)
+    }
+
     /// Get the effective manifest TTL for a registry.
     /// Uses registry-specific TTL if set, otherwise falls back to global.
     pub fn manifest_ttl_for(&self, registry_name: &str) -> Duration {
@@ -222,6 +264,7 @@ mod tests {
         assert_eq!(reg.name, "docker.io");
         assert_eq!(reg.url, "https://registry-1.docker.io");
         assert!(reg.user_agent.is_none());
+        assert!(reg.tag_ttl.is_none());
         assert!(reg.manifest_ttl.is_none());
         assert!(reg.auth.is_none());
     }
@@ -241,6 +284,13 @@ mod tests {
     }
 
     #[test]
+    fn test_tag_ttl_for_uses_global_default() {
+        let config = AppConfig::default();
+        let ttl = config.tag_ttl_for("unknown-registry");
+        assert_eq!(ttl, config.cache.tag_ttl);
+    }
+
+    #[test]
     fn test_manifest_ttl_for_uses_global_default() {
         let config = AppConfig::default();
         let ttl = config.manifest_ttl_for("unknown-registry");
@@ -255,6 +305,7 @@ mod tests {
                 name: "docker.io".to_string(),
                 url: "https://registry-1.docker.io".to_string(),
                 user_agent: None,
+                tag_ttl: None,
                 manifest_ttl: Some(custom_ttl),
                 auth: None,
                 tls: TlsConfig::default(),
@@ -262,11 +313,29 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(config.manifest_ttl_for("docker.io"), custom_ttl);
-        // Unknown registry falls back to global
         assert_eq!(
             config.manifest_ttl_for("ghcr.io"),
             config.cache.manifest_ttl
         );
+    }
+
+    #[test]
+    fn test_tag_ttl_for_uses_registry_specific() {
+        let custom_ttl = Duration::from_secs(120);
+        let config = AppConfig {
+            registries: vec![RegistryConfig {
+                name: "docker.io".to_string(),
+                url: "https://registry-1.docker.io".to_string(),
+                user_agent: None,
+                tag_ttl: Some(custom_ttl),
+                manifest_ttl: None,
+                auth: None,
+                tls: TlsConfig::default(),
+            }],
+            ..Default::default()
+        };
+        assert_eq!(config.tag_ttl_for("docker.io"), custom_ttl);
+        assert_eq!(config.tag_ttl_for("ghcr.io"), config.cache.tag_ttl);
     }
 
     #[test]
@@ -276,13 +345,13 @@ mod tests {
                 name: "docker.io".to_string(),
                 url: "https://registry-1.docker.io".to_string(),
                 user_agent: None,
-                manifest_ttl: None, // no custom TTL
+                tag_ttl: None,
+                manifest_ttl: None,
                 auth: None,
                 tls: TlsConfig::default(),
             }],
             ..Default::default()
         };
-        // Should fall back to global TTL
         assert_eq!(
             config.manifest_ttl_for("docker.io"),
             config.cache.manifest_ttl
@@ -290,12 +359,43 @@ mod tests {
     }
 
     #[test]
+    fn test_cache_config_deserialize_never() {
+        let toml_str = r#"
+            data_dir = "/tmp/cache"
+            max_size_gb = 4
+            tag_ttl = "0s"
+            manifest_ttl = "0s"
+            blob_ttl = "0s"
+        "#;
+        let cc: CacheConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cc.tag_ttl, Duration::ZERO);
+        assert_eq!(cc.manifest_ttl, Duration::ZERO);
+        assert_eq!(cc.blob_ttl, Duration::ZERO);
+    }
+
+    #[test]
+    fn test_cache_config_deserialize_durations() {
+        let toml_str = r#"
+            data_dir = "/tmp/cache"
+            max_size_gb = 4
+            tag_ttl = "1h"
+            manifest_ttl = "30m"
+            blob_ttl = "14d"
+        "#;
+        let cc: CacheConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cc.tag_ttl, Duration::from_secs(3600));
+        assert_eq!(cc.manifest_ttl, Duration::from_secs(1800));
+        assert_eq!(cc.blob_ttl, Duration::from_secs(14 * 24 * 3600));
+    }
+
+    #[test]
     fn test_validate_fills_in_docker_io_url() {
         let mut config = AppConfig {
             registries: vec![RegistryConfig {
                 name: "docker.io".to_string(),
-                url: String::new(), // empty
+                url: String::new(),
                 user_agent: None,
+                tag_ttl: None,
                 manifest_ttl: None,
                 auth: None,
                 tls: TlsConfig::default(),
@@ -313,6 +413,7 @@ mod tests {
                 name: "ghcr.io".to_string(),
                 url: String::new(),
                 user_agent: None,
+                tag_ttl: None,
                 manifest_ttl: None,
                 auth: None,
                 tls: TlsConfig::default(),
@@ -330,6 +431,7 @@ mod tests {
                 name: "my.local".to_string(),
                 url: String::new(),
                 user_agent: None,
+                tag_ttl: None,
                 manifest_ttl: None,
                 auth: None,
                 tls: TlsConfig {
@@ -351,6 +453,7 @@ mod tests {
                 name: "docker.io".to_string(),
                 url: "https://custom-mirror.example.com".to_string(),
                 user_agent: None,
+                tag_ttl: None,
                 manifest_ttl: None,
                 auth: None,
                 tls: TlsConfig::default(),
@@ -371,6 +474,7 @@ mod tests {
                 name: String::new(),
                 url: "https://example.com".to_string(),
                 user_agent: None,
+                tag_ttl: None,
                 manifest_ttl: None,
                 auth: None,
                 tls: TlsConfig::default(),
@@ -392,6 +496,7 @@ mod tests {
                 name: "docker.io".to_string(),
                 url: "https://registry-1.docker.io".to_string(),
                 user_agent: None,
+                tag_ttl: None,
                 manifest_ttl: None,
                 auth: None,
                 tls: TlsConfig::default(),
@@ -419,6 +524,7 @@ mod tests {
                 name: "docker.io".to_string(),
                 url: "https://registry-1.docker.io".to_string(),
                 user_agent: None,
+                tag_ttl: None,
                 manifest_ttl: None,
                 auth: None,
                 tls: TlsConfig::default(),
@@ -446,6 +552,7 @@ mod tests {
                 name: "docker.io".to_string(),
                 url: "https://registry-1.docker.io".to_string(),
                 user_agent: None,
+                tag_ttl: None,
                 manifest_ttl: None,
                 auth: None,
                 tls: TlsConfig::default(),
@@ -468,7 +575,8 @@ mod tests {
     fn test_cache_config_defaults() {
         let cc = CacheConfig::default();
         assert_eq!(cc.max_size_gb, 4);
-        assert_eq!(cc.manifest_ttl, Duration::from_secs(30 * 60));
+        assert_eq!(cc.tag_ttl, Duration::from_secs(30 * 60));
+        assert_eq!(cc.manifest_ttl, Duration::from_secs(7 * 24 * 3600));
         assert_eq!(cc.blob_ttl, Duration::from_secs(7 * 24 * 3600));
     }
 
