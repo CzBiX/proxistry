@@ -112,7 +112,18 @@ impl FsStorage {
         let data = fs::read(&meta_path)
             .await
             .with_context(|| format!("read meta {}", meta_path.display()))?;
-        let meta: CacheMetadata = serde_json::from_slice(&data).context("parse meta")?;
+        let meta: CacheMetadata = match serde_json::from_slice(&data) {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!(
+                    key = %key,
+                    path = %meta_path.display(),
+                    error = %e,
+                    "corrupted cache meta file, treating as cache miss"
+                );
+                return Ok(None);
+            }
+        };
         Ok(Some(meta))
     }
 
@@ -710,6 +721,25 @@ mod tests {
         assert_eq!(deserialized.digest.as_deref(), Some("sha256:abc"));
         assert_eq!(deserialized.created_at, meta.created_at);
         assert_eq!(deserialized.last_accessed, meta.last_accessed);
+    }
+
+    #[tokio::test]
+    async fn test_read_meta_corrupted_returns_none() {
+        let tmp = TempDir::new().unwrap();
+        let storage = make_test_storage(&tmp).await;
+        let key = "corrupted/test";
+
+        // Create the data file and an empty (corrupted) meta file
+        let data_path = storage.data_path(key).unwrap();
+        if let Some(parent) = data_path.parent() {
+            fs::create_dir_all(parent).await.unwrap();
+        }
+        fs::write(&data_path, b"some data").await.unwrap();
+        let meta_path = storage.meta_path(key).unwrap();
+        fs::write(&meta_path, b"").await.unwrap(); // empty = corrupted
+
+        let result = storage.read_meta(key).await.unwrap();
+        assert!(result.is_none());
     }
 
     async fn make_meta_cached_storage(
