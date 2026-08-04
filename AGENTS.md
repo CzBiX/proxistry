@@ -30,6 +30,7 @@ Single binary. Modules:
 - `proxy/` — upstream HTTP client, request handler, URL rewriting
 - `registry/` — upstream auth (basic/token), path-based registry routing
 - `middleware/` — request logging
+- `error.rs` — application error types, `IntoResponse` mapping
 - `server.rs` — Axum router assembly, background task spawning
 - `config.rs` — TOML config deserialization
 
@@ -40,7 +41,8 @@ Entry point: `src/main.rs` → `server::build_router()` → Axum serve with grac
 - `config.toml` is gitignored; copy from `config.example.toml`
 - All fields optional with sensible defaults
 - Listen default: `0.0.0.0:5000`
-- Cache default dir: `./cache`, max 4GB, LRU eviction every 5 min
+- Cache default dir: `./cache` on Linux, `$TMPDIR/proxistry_cache` elsewhere; max 4GB, LRU eviction every 5 min
+- Cache TTLs: `tag_ttl` 30m, `manifest_ttl` 7d, `blob_ttl` 7d (all overridable, `0s` disables expiry)
 
 ## Release Flow
 
