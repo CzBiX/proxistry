@@ -18,7 +18,7 @@ anyhow = "1"
 thiserror = "2"
 dashmap = "6"
 bytes = "1"
-base64 = "0.22"
+base64 = "0.23"
 sha2 = "0.11"
 hex = "0.4"
 tower = { version = "0.5", features = ["util"] }
